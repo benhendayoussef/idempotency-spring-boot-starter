@@ -1,0 +1,125 @@
+{
+  "properties": [
+    {
+      "name": "idempotency.enabled",
+      "description": "Master switch for the starter. Set to false to disable @Idempotent entirely without removing the dependency."
+    },
+    {
+      "name": "idempotency.store",
+      "description": "Which IdempotencyStore backs replay. AUTO picks Redis when spring-boot-starter-data-redis is present, otherwise fails startup unless MEMORY or JDBC is set explicitly."
+    },
+    {
+      "name": "idempotency.default-ttl",
+      "description": "How long a claimed key (and its completed record) is retained when @Idempotent#ttl() is not set."
+    },
+    {
+      "name": "idempotency.header-name",
+      "description": "Request header carrying the client-supplied idempotency key, when @Idempotent#keyHeader() is not set."
+    },
+    {
+      "name": "idempotency.require-key",
+      "description": "Reject requests with no idempotency key (400) instead of passing them through unprotected."
+    },
+    {
+      "name": "idempotency.on-conflict",
+      "description": "What to do when a duplicate request arrives while the first is still IN_PROGRESS."
+    },
+    {
+      "name": "idempotency.wait-timeout",
+      "description": "Maximum time a WAIT-policy duplicate polls for the in-flight request to complete before returning 409."
+    },
+    {
+      "name": "idempotency.scope",
+      "description": "Default namespace for storage keys, when @Idempotent#scope() is DEFAULT. Defaults to GLOBAL, which needs no Spring Security. USER and TENANT require an authenticated principal (Spring Security)."
+    },
+    {
+      "name": "idempotency.tenant-claim",
+      "description": "JWT claim read by the built-in TENANT scope resolver."
+    },
+    {
+      "name": "idempotency.on-missing-principal",
+      "description": "What to do when a USER/TENANT-scoped request has no resolvable authenticated principal. GLOBAL falls back to the global namespace; SKIP executes unprotected; REJECT returns 400."
+    },
+    {
+      "name": "idempotency.on-store-failure",
+      "description": "PROCEED executes the handler unprotected (with a WARN log) when the store is unreachable; FAIL returns 503."
+    },
+    {
+      "name": "idempotency.problem-details",
+      "description": "Register the built-in RFC 9457 ProblemDetail exception advice for the library's own exceptions."
+    },
+    {
+      "name": "idempotency.max-payload-size",
+      "description": "Responses larger than this are executed normally but not cached for replay; a WARN is logged instead."
+    },
+    {
+      "name": "idempotency.release-on",
+      "description": "Which handler outcomes release the claimed key (allowing a clean retry) instead of completing it for replay."
+    },
+    {
+      "name": "idempotency.redis.key-prefix",
+      "description": "Prefix applied to every Redis key the store writes."
+    },
+    {
+      "name": "idempotency.jdbc.table-name",
+      "description": "Name of the table created by db/idempotency/postgres.sql."
+    },
+    {
+      "name": "idempotency.jdbc.sweeper-enabled",
+      "description": "Run a background task that deletes expired rows. Off by default: the atomic claim already reclaims expired rows on the hot path, so this only matters for disk usage on keys nobody ever retries."
+    },
+    {
+      "name": "idempotency.jdbc.sweeper-interval",
+      "description": "How often the sweeper runs, when enabled."
+    }
+  ],
+  "hints": [
+    {
+      "name": "idempotency.store",
+      "values": [
+        { "value": "auto", "description": "Redis if present on the classpath, otherwise fail startup unless overridden." },
+        { "value": "redis", "description": "Fast, at-least-once. Requires spring-boot-starter-data-redis." },
+        { "value": "jdbc", "description": "Exactly-once: the completion write joins the caller's transaction. Requires a DataSource." },
+        { "value": "memory", "description": "Single-instance, non-durable. Local development and tests only." }
+      ]
+    },
+    {
+      "name": "idempotency.on-conflict",
+      "values": [
+        { "value": "wait", "description": "Poll until the in-flight request completes, then replay its response." },
+        { "value": "fail_fast", "description": "Return 409 with Retry-After immediately." }
+      ]
+    },
+    {
+      "name": "idempotency.on-store-failure",
+      "values": [
+        { "value": "proceed", "description": "Execute the handler unprotected; log a WARN and increment a metric." },
+        { "value": "fail", "description": "Return 503 without executing the handler." }
+      ]
+    },
+    {
+      "name": "idempotency.scope",
+      "values": [
+        { "value": "global", "description": "One namespace for every caller." },
+        { "value": "user", "description": "Namespaced per authenticated principal (requires Spring Security)." },
+        { "value": "tenant", "description": "Namespaced per JWT tenant claim (idempotency.tenant-claim)." },
+        { "value": "custom", "description": "Register your own ScopeResolver bean for CUSTOM." }
+      ]
+    },
+    {
+      "name": "idempotency.on-missing-principal",
+      "values": [
+        { "value": "global", "description": "Fall back to the global namespace; idempotency still works, just not per-caller." },
+        { "value": "skip", "description": "Execute the handler unprotected; log a DEBUG line and increment a metric." },
+        { "value": "reject", "description": "Return 400 without executing the handler." }
+      ]
+    },
+    {
+      "name": "idempotency.release-on",
+      "values": [
+        { "value": "five_xx", "description": "Release the key when the handler throws a 5xx/infrastructure failure, so a retry re-executes." },
+        { "value": "timeout", "description": "Release the key when a WAIT-policy duplicate times out waiting for the in-flight request." }
+      ]
+    }
+  ]
+}
