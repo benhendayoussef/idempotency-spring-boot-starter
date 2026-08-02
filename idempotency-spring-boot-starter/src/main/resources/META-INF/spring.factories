@@ -1,0 +1,3 @@
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+io.github.benhendayoussef.idempotency.autoconfigure.MissingStoreFailureAnalyzer,\
+io.github.benhendayoussef.idempotency.autoconfigure.MissingScopeResolverFailureAnalyzer
