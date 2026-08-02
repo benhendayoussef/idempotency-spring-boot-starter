@@ -1,0 +1,17 @@
+.gradle/
+build/
+out/
+
+# Editor and tool directories
+.idea/
+*.iml
+.vscode/
+.claude/
+
+!gradle/wrapper/gradle-wrapper.jar
+
+# Working notes and design drafts live at the repo root but are not part of the
+# published project. Only the documentation below is tracked.
+/*.md
+!/README.md
+!/CHANGELOG.md

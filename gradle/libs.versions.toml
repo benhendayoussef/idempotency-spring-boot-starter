@@ -1,0 +1,16 @@
+[versions]
+springBoot = "4.1.0"
+springFramework = "7.0.8"
+junit = "5.11.4"
+testcontainers = "1.20.4"
+assertj = "3.27.0"
+mavenPublish = "0.37.0"
+
+[libraries]
+spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
+testcontainers-bom       = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+assertj-core             = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+
+[plugins]
+springBoot   = { id = "org.springframework.boot", version.ref = "springBoot" }
+mavenPublish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }
