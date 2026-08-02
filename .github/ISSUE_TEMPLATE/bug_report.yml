@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in idempotency-spring-boot-starter isn't working as documented
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Library version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: store
+    attributes:
+      label: Store
+      options:
+        - Redis
+        - JDBC / Postgres
+        - In-memory
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A minimal @Idempotent endpoint + config that reproduces this, if possible.
+      render: java
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant idempotency.* configuration
+      render: yaml

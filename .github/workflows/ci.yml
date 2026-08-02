@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    # Docker is preinstalled on GitHub-hosted ubuntu-latest runners, required for the
+    # Testcontainers-backed idempotency-store-redis/idempotency-store-jdbc test suites.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test
+        run: ./gradlew clean build
+
+      # Virtual threads don't exist on the project's pinned Java 17 toolchain; this task runs the
+      # same test sources on a separately-provisioned JDK 21+ launcher without changing what the
+      # library is normally built and tested against.
+      - name: Set up JDK 21 (for testVirtualThreads)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Virtual threads check
+        run: ./gradlew :idempotency-spring-boot-starter:testVirtualThreads
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'

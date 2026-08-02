@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose something new for idempotency-spring-boot-starter
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Please check the README's Roadmap section first - this may already be planned.
+        Note this library's explicit non-goals (not a retry library, not a rate limiter, not a
+        dedup layer for Kafka consumers) before proposing scope that falls outside idempotent HTTP
+        request replay.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
