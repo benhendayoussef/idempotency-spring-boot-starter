@@ -123,7 +123,7 @@ class JdbcIdempotencyBehaviorTest extends AbstractIdempotencyBehaviorTest {
      * needs gating behind a property rather than becoming the default.
      */
     @Test
-    @Disabled("Exactly-once via transaction joining - targeted at 0.2; see this method's javadoc "
+    @Disabled("Exactly-once via transaction joining - targeted at 0.2, tracked in issue #1; see this method's javadoc "
             + "for the intended design and its edge cases.")
     void row22_transactionalHandlerRollsBack_recordShouldBeInProgressUnderExactlyOnceAspiration() throws Exception {
         txController.reset();
