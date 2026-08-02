@@ -220,6 +220,14 @@ Replay always deserializes into the type resolved from the live method signature
 type name pulled out of the store — trusting a type name from a store is a classic
 polymorphic-deserialization gadget vector.
 
+### Further reading
+
+- [`docs/design-decisions.md`](docs/design-decisions.md) — the architectural reasoning: why AOP
+  over a servlet filter, the atomic claim, the failure policy, and what "exactly-once" does and
+  doesn't mean here.
+- [`docs/explained/`](docs/explained/00-overview.md) — a class-by-class walkthrough of the
+  entire codebase.
+
 ## Extending
 
 Implement `IdempotencyStore` (four methods: `claim`, `complete`, `release`, `find`) and register
