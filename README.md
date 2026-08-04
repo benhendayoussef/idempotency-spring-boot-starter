@@ -3,6 +3,7 @@
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.benhendayoussef/idempotency-spring-boot-starter.svg)](https://central.sonatype.com/artifact/io.github.benhendayoussef/idempotency-spring-boot-starter)
 [![Build](https://github.com/benhendayoussef/idempotency-spring-boot-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/benhendayoussef/idempotency-spring-boot-starter/actions)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Foojay Article](https://img.shields.io/badge/foojay.io-article-orange.svg)](https://foojay.io/today/idempotent-spring-boot-starter/)
 
 A network retry, a double-tapped "Pay" button, or a load balancer replaying a timed-out request
 all look identical to your server: a second POST that arrives after the first one already
@@ -19,6 +20,8 @@ public ResponseEntity<OrderResponse> placeOrder(@RequestBody OrderRequest reques
 
 A duplicate request carrying the same `Idempotency-Key` header gets the **original response
 replayed** — not a re-execution, not an error.
+
+> Written up on [foojay.io](https://foojay.io/today/idempotent-spring-boot-starter/) if you want the full story behind the design decisions.
 
 ## Quickstart (Redis)
 
@@ -259,6 +262,10 @@ app's own `ObjectMapper`).
 - **0.3** — WebFlux support, Caffeine store for single-instance apps
 - **0.4** — GraalVM native image hints
 - **0.5** — Kotlin coroutine support, `@Idempotent` on `@KafkaListener`
+
+## Contributing
+
+Issues and PRs are very welcome. If you've shipped idempotency in production and have thoughts on the failure policy or the exactly-once limitation, open a discussion — that feedback directly shapes the roadmap.
 
 ## License
 
