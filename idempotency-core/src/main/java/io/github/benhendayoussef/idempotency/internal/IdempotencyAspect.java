@@ -80,13 +80,12 @@ public class IdempotencyAspect implements Ordered {
     private final ExpressionParser spelParser = new SpelExpressionParser();
     private final ParameterNameDiscoverer paramNames = new DefaultParameterNameDiscoverer();
 
-    public IdempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
-            ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
-            Map<IdempotencyScope, ScopeResolver> scopes, ObjectMapper payloadMapper,
-            IdempotencyMetrics metrics) {
-        this(store, props, fingerprinter, composer, scopes, payloadMapper, metrics, null);
-    }
-
+    /**
+     * @param txRunner {@code null} for the default separate-commits behaviour. Kept as a required
+     *                 argument rather than an overload so every call site has to state which mode it
+     *                 is building - a convenience constructor here would make "no transaction
+     *                 joining" the silent case, and that is the case worth being explicit about.
+     */
     public IdempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes, ObjectMapper payloadMapper,
