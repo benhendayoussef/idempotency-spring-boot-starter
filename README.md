@@ -206,12 +206,32 @@ transactional ones:
 - **Replays still open zero transactions.** The aspect answers from the store without calling
   `proceed()`, so the transaction manager is never touched — the whole reason for the aspect
   ordering, and asserted directly in the test suite.
-- **One connection per in-flight request**, held for the handler's whole duration. Size your
-  connection pool for concurrent in-flight requests, not just for query time. The library never
+- **One connection per in-flight request**, held for the handler's whole duration. The library never
   nests a second transaction inside the first (asserted); the only exception is a handler that asks
-  for `REQUIRES_NEW` itself.
+  for `REQUIRES_NEW` itself. **Size your connection pool for concurrent in-flight requests, not just
+  for query time** — see the measurement below.
 - Self-invocation bypasses the proxy here exactly as it does for `@Transactional`: an inner call
   gets neither annotation's behaviour.
+
+**Measured cost of an undersized pool.** 16 concurrent requests, distinct keys, at a handler with no
+`@Transactional` of its own that takes 250ms for reasons of its own (an external call, an image
+resize) — against a deliberately small **4-connection** pool, real Tomcat and real Postgres, after
+warmup:
+
+| Mode | Median | Max | Wall clock for all 16 |
+|---|---|---|---|
+| Default | ~300–345ms | ~310–415ms | **~310–420ms** |
+| `join-transaction=true` | ~835ms | ~1110–1215ms | **~1115–1215ms** |
+
+The unconstrained floor is 250ms. In the default mode the handler holds no connection while it runs,
+so all 16 proceed in parallel and the batch lands near the floor. In joined mode each one occupies a
+connection for its whole 250ms, so effective concurrency is capped at the pool size: 16 requests ÷ 4
+connections × 250ms ≈ 1s, which is what the measurement shows. **No requests failed in either mode**
+— the cost is latency, not errors, until the pool's `connection-timeout` is reached.
+
+That ratio is a property of *your* pool size versus *your* concurrency, not a fixed penalty. A pool
+sized at or above peak concurrent in-flight requests shows no such gap. Reproduce with
+`./gradlew :idempotency-spring-boot-starter:test --tests "*TxJoin*LoadTest*" -i`.
 
 If the property is `true` while the active store is Redis or in-memory, it logs a WARN and no-ops —
 it will not break a service that inherits a shared profile. If the store is JDBC and there is no
