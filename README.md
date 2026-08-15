@@ -126,12 +126,13 @@ a silent execution of the wrong payload.
 | `idempotency.jdbc.table-name` | `idempotency_record` | |
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
+| `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
 
 ## Store comparison
 
 | | Redis | JDBC (Postgres) |
 |---|---|---|
-| Guarantee | **At-least-once.** If the process crashes between the business transaction committing and the completion record being written, the key stays `IN_PROGRESS` until TTL and a retry re-executes. | **At-least-once via `@Idempotent` alone — the same as Redis.** See the caveat below for the narrower case where JDBC is genuinely exactly-once. |
+| Guarantee | **At-least-once.** If the process crashes between the business transaction committing and the completion record being written, the key stays `IN_PROGRESS` until TTL and a retry re-executes. | **At-least-once by default; exactly-once with `idempotency.jdbc.join-transaction=true`.** Both modes are described below — read them before switching. |
 | Speed | Fast — a single round trip per claim. | Slower — shares the datasource and transaction. |
 | Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and `db/idempotency/postgres.sql` applied — see the JDBC quickstart above |
 | Good for | The other 95% of use cases. | Payments and anything else where a replayed side effect is unacceptable, **if you use it the way described below.** |
@@ -146,7 +147,9 @@ Expect closer to native-network latency (well under a millisecond of *aspect* ov
 colocated, non-Dockerized Redis/Postgres in production. Don't be misled if you benchmark the same way
 and see similar numbers on Docker Desktop — that's the container networking layer, not this library.
 
-### The JDBC store's exactly-once caveat
+### The JDBC store's two modes
+
+#### Default: at-least-once
 
 `JdbcIdempotencyStore.complete()` is `@Transactional(propagation = Propagation.REQUIRED)`: it joins
 an *already-open* transaction if one is active on the calling thread, and starts its own if not.
@@ -156,12 +159,60 @@ your handler has already returned — a `@Transactional` handler's own transacti
 committed or rolled back. `complete()` then simply starts a **new**, independent transaction of its
 own, so it does **not** commit atomically with your business data just because both are annotated.
 
-The exactly-once guarantee is real, but only when *you* call the store from inside a transaction
-you're already holding open — e.g. from a repository or service method that both writes your
-business row and calls `IdempotencyStore.complete()` (or relies on the same connection/transaction
-context) before returning. Relying on `@Idempotent` + `@Transactional` on the same method to give
-you atomicity "for free" does not currently work; treat the JDBC store as at-least-once, same as
-Redis, unless you've verified your own call site joins the transaction directly.
+Two commits, not one. Crash between them and the business data is committed with no completion
+record, so the next request with the same key re-executes. That is at-least-once, and it is what you
+get out of the box — same as Redis.
+
+The exactly-once guarantee is still available without the property below, but only when *you* call
+the store from inside a transaction you're already holding open — e.g. from a repository or service
+method that both writes your business row and calls `IdempotencyStore.complete()` before returning.
+`@Idempotent` + `@Transactional` on the same method does **not** give you atomicity by itself.
+
+#### Opt-in: exactly-once via transaction joining
+
+```yaml
+idempotency:
+  store: jdbc
+  jdbc:
+    join-transaction: true   # default false
+```
+
+With this on, the aspect opens a transaction around `pjp.proceed()` **and** the completion write, so
+your handler's own `@Transactional(REQUIRED)` *joins* it rather than opening and closing its own
+first. One physical commit covers both. There is no window to crash in, and a handler that rolls
+back takes the completion record with it — a retry genuinely re-executes instead of replaying a
+response that was never committed.
+
+The claim still commits independently, before that transaction opens. It has to: if the
+`IN_PROGRESS` row only became visible when your handler committed, every concurrent duplicate would
+race straight past it.
+
+**Read this before switching it on.** It changes how *every* `@Idempotent` method executes, not just
+transactional ones:
+
+- **A handler with no `@Transactional` of its own now runs inside a transaction**, holding a
+  connection for its whole duration. Locking and connection-pool behaviour change. This is the main
+  reason the property is opt-in.
+- **A handler annotated `@Transactional(REQUIRES_NEW)` opts out of joining**, so atomicity does not
+  hold for it: its own transaction commits or rolls back independently while the completion record
+  follows the aspect's. That is what `REQUIRES_NEW` means, and the library does not override it.
+- **Your handler's own `@Transactional(timeout = ...)` stops applying**, because a joining
+  participant cannot widen or narrow the transaction it joined. Configure a timeout on the
+  transaction manager instead (`spring.transaction.default-timeout`).
+- **The failure policy is unchanged.** 5xx still releases the key; a 4xx is still kept and replayed.
+  The 4xx record is written after the rollback in its own transaction, so a retry gets the same
+  deterministic client error — but the business data that error described is gone. Don't build a 4xx
+  body out of rows written in the same request.
+- **Replays still open zero transactions.** The aspect answers from the store without calling
+  `proceed()`, so the transaction manager is never touched — the whole reason for the aspect
+  ordering, and asserted directly in the test suite.
+- Self-invocation bypasses the proxy here exactly as it does for `@Transactional`: an inner call
+  gets neither annotation's behaviour.
+
+If the property is `true` while the active store is Redis or in-memory, it logs a WARN and no-ops —
+it will not break a service that inherits a shared profile. If the store is JDBC and there is no
+`PlatformTransactionManager`, startup fails naming the property rather than surprising you at
+runtime.
 
 Nobody else publishes this table. If you only remember one thing from this README, it's that
 "idempotent" and "exactly-once" are not the same claim, and getting the latter from the JDBC store
@@ -185,9 +236,10 @@ Being loud about these is what makes a library trustworthy:
   request time. A specific `user`/`tenant`-scoped request that reaches the aspect unauthenticated
   (e.g. a public endpoint on an app that also has protected ones) is handled per
   `idempotency.on-missing-principal` — never a raw 500.
-- The JDBC store's exactly-once guarantee does not come for free from `@Idempotent` +
-  `@Transactional` on the same method — see the caveat under Store comparison above. Out of the
-  box, both stores are at-least-once.
+- Out of the box, both stores are at-least-once. The JDBC store's exactly-once guarantee does not
+  come for free from `@Idempotent` + `@Transactional` on the same method — it needs
+  `idempotency.jdbc.join-transaction=true`, which has its own tradeoffs. See the two modes under
+  Store comparison above.
 - **`on-conflict=WAIT` (the default) holds a servlet request thread per waiting duplicate for up to
   `wait-timeout`.** A burst of concurrent duplicates on the same key can measurably slow down
   *unrelated* requests on the same server while the pool is under pressure (observed: an unrelated
@@ -253,9 +305,8 @@ app's own `ObjectMapper`).
 
 ## Roadmap
 
-- **0.2** — Genuine exactly-once for the JDBC store when `@Idempotent` + `@Transactional` are on
-  the same method (transaction-joining the completion write instead of always opening an
-  independent one), MySQL store, `mode: filter` for byte-exact replay, Micrometer metrics
+- **0.2** — ✅ Genuine exactly-once for the JDBC store via `idempotency.jdbc.join-transaction`;
+  still to come: MySQL store, `mode: filter` for byte-exact replay, Micrometer metrics
 - **0.3** — WebFlux support, Caffeine store for single-instance apps
 - **0.4** — GraalVM native image hints
 - **0.5** — Kotlin coroutine support, `@Idempotent` on `@KafkaListener`

@@ -6,7 +6,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -75,9 +74,11 @@ class JdbcIdempotencyBehaviorTest extends AbstractIdempotencyBehaviorTest {
      * rather than joining one that later rolls back. The record therefore ends up
      * {@code COMPLETED} even though the business transaction rolled back.
      *
-     * <p>This test will go red the moment that behaviour changes, intentionally or not. See
-     * {@link #row22_transactionalHandlerRollsBack_recordShouldBeInProgressUnderExactlyOnceAspiration()}
-     * for the exactly-once target it would need to flip to.
+     * <p>This test will go red the moment that behaviour changes, intentionally or not - which makes
+     * it the backward-compatibility gate for {@code idempotency.jdbc.join-transaction}: this context
+     * leaves the property at its default, and the default must keep behaving exactly as 0.1 did.
+     * {@code JdbcTxJoinBehaviorTest} runs the same scenario with the property on and asserts the
+     * opposite outcome.
      */
     @Test
     void row22_transactionalHandlerRollsBack_recordStillCompletesBecauseStoreIsAtLeastOnce() throws Exception {
@@ -106,48 +107,6 @@ class JdbcIdempotencyBehaviorTest extends AbstractIdempotencyBehaviorTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .header().string("Idempotent-Replay", "true"));
         assertThat(txController.callCount()).isEqualTo(1);
-    }
-
-    /**
-     * The specification for exactly-once via transaction joining, kept executable but disabled
-     * until that work lands. The intended approach: on the execute path only, wrap
-     * {@code pjp.proceed()} plus {@code store.complete()} in a programmatic transaction
-     * ({@code TransactionTemplate}) so a handler's own {@code @Transactional(REQUIRED)} joins it
-     * rather than opening and closing its own beforehand.
-     *
-     * <p>Known edge cases that design has to handle: the claim must still commit independently to
-     * stay visible to concurrent callers, so a rollback leaves an orphan {@code IN_PROGRESS} row
-     * the aspect must {@code release()} in {@code REQUIRES_NEW} - including on
-     * {@code UnexpectedRollbackException} from a silent {@code setRollbackOnly()}. It would also
-     * put non-{@code @Transactional} handlers inside a transaction they never asked for, so it
-     * needs gating behind a property rather than becoming the default.
-     */
-    @Test
-    @Disabled("Exactly-once via transaction joining - targeted at 0.2, tracked in issue #1; see this method's javadoc "
-            + "for the intended design and its edge cases.")
-    void row22_transactionalHandlerRollsBack_recordShouldBeInProgressUnderExactlyOnceAspiration() throws Exception {
-        txController.reset();
-        String key = "tx-row22-" + System.nanoTime();
-
-        mockMvc.perform(post("/m/tx-rollback").header("Idempotency-Key", key)
-                        .contentType("application/json").content("{}"))
-                .andExpect(status().isCreated());
-
-        assertThat(txController.callCount()).isEqualTo(1);
-
-        // The business transaction rolled back after the aspect wrote the COMPLETED record inside
-        // it; the record must not have survived as COMPLETED (same assertion as
-        // JdbcIdempotencyStoreTest, now proven through the real HTTP+AOP path).
-        var recordAfterRollback = store.find(findStorageKeyFor(key));
-        assertThat(recordAfterRollback).isPresent();
-        assertThat(recordAfterRollback.get().state()).isEqualTo(State.IN_PROGRESS);
-
-        // A retry must therefore re-execute rather than replay a "completed" response that never
-        // durably existed.
-        mockMvc.perform(post("/m/tx-rollback").header("Idempotency-Key", key)
-                        .contentType("application/json").content("{}"))
-                .andExpect(status().isCreated());
-        assertThat(txController.callCount()).isEqualTo(2);
     }
 
     /**

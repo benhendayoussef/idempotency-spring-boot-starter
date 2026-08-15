@@ -119,10 +119,36 @@ database transaction at all, which means `complete()` always runs after the hand
 transaction has already committed or rolled back. `REQUIRED` then has nothing to join and opens a
 new, independent transaction.
 
-**So out of the box, via the annotation alone, both stores are at-least-once.** Making the
-annotation path genuinely exactly-once (by wrapping the execute path in a programmatic transaction
-the handler's own `@Transactional` joins) is targeted at 0.2. The README's store comparison table
-states the current guarantee plainly rather than implying the stronger one.
+**So out of the box, via the annotation alone, both stores are at-least-once.** The README's store
+comparison table states that guarantee plainly rather than implying the stronger one.
+
+### Closing the window: `idempotency.jdbc.join-transaction`
+
+0.2 makes the annotation path genuinely exactly-once, behind a property. The aspect wraps
+`proceed()` *and* the completion write in a programmatic transaction (`TransactionTemplate`), so the
+handler's own `@Transactional(REQUIRED)` joins that instead of opening and closing its own first.
+One physical commit, no crash window.
+
+Three things decided its shape:
+
+- **The claim stays outside.** It must commit independently or the `IN_PROGRESS` row would only
+  become visible when the handler commits, and every concurrent duplicate would race past it — which
+  would defeat the entire library. So a rolled-back transaction leaves an orphaned claim the aspect
+  has to `release()` afterwards, including on the `UnexpectedRollbackException` a silent
+  `setRollbackOnly()` produces at commit time.
+- **It is opt-in, not the default.** Joining changes execution for every advised method, not only
+  transactional ones: a handler with no `@Transactional` of its own is pulled into a transaction it
+  never asked for, and a handler's own `@Transactional(timeout)` stops applying once it joins. That
+  is too large a behaviour change to impose on an upgrade.
+- **The failure policy did not change.** A terminal 4xx still gets written and replayed; it is just
+  written *after* the rollback, in its own transaction. In the default mode the 4xx record survives
+  for exactly the same reason — an independent write — so keeping that shape means the property
+  changes atomicity of the success path only, rather than quietly redefining what a 4xx does.
+
+The seam is a one-method `TransactionRunner` interface in `idempotency-core`'s `internal` package,
+implemented in `idempotency-store-jdbc`. Core deliberately has no `spring-tx` dependency — the
+aspect has to work when the Redis or in-memory store is active and no transaction manager exists —
+so it detects `UnexpectedRollbackException` by class name rather than importing it.
 
 ## Key composition
 

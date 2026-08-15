@@ -71,6 +71,10 @@
     {
       "name": "idempotency.jdbc.sweeper-interval",
       "description": "How often the sweeper runs, when enabled."
+    },
+    {
+      "name": "idempotency.jdbc.join-transaction",
+      "description": "Run the handler and the completion write in one shared transaction so they commit or roll back together (exactly-once), instead of committing separately (at-least-once). Off by default: it pulls handlers with no @Transactional of their own into a transaction, and a handler's own @Transactional(timeout) stops applying once it joins."
     }
   ],
   "hints": [
@@ -79,7 +83,7 @@
       "values": [
         { "value": "auto", "description": "Redis if present on the classpath, otherwise fail startup unless overridden." },
         { "value": "redis", "description": "Fast, at-least-once. Requires spring-boot-starter-data-redis." },
-        { "value": "jdbc", "description": "Exactly-once: the completion write joins the caller's transaction. Requires a DataSource." },
+        { "value": "jdbc", "description": "Durable, at-least-once by default; exactly-once with idempotency.jdbc.join-transaction=true. Requires a DataSource." },
         { "value": "memory", "description": "Single-instance, non-durable. Local development and tests only." }
       ]
     },

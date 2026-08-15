@@ -16,17 +16,21 @@ import io.github.benhendayoussef.idempotency.internal.IdempotencyExceptionHandle
 import io.github.benhendayoussef.idempotency.internal.IdempotencyKeyComposer;
 import io.github.benhendayoussef.idempotency.internal.InMemoryIdempotencyStore;
 import io.github.benhendayoussef.idempotency.internal.NoOpIdempotencyMetrics;
+import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.internal.scope.GlobalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.PrincipalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.TenantScopeResolver;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencyRecordSweeper;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySweeperScheduler;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcTransactionRunner;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -41,6 +45,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * Auto-configures {@code @Idempotent} support: the aspect, key composition, fingerprinting, and
@@ -59,6 +64,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 @ConditionalOnWebApplication(type = Type.SERVLET)
 @EnableConfigurationProperties(IdempotencyProperties.class)
 public class IdempotencyAutoConfiguration {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyAutoConfiguration.class);
 
     @Bean
     @ConditionalOnMissingBean
@@ -135,9 +142,20 @@ public class IdempotencyAutoConfiguration {
     public IdempotencyAspect idempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes,
-            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics) {
+            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            ObjectProvider<TransactionRunner> transactionRunner) {
+        TransactionRunner runner = transactionRunner.getIfAvailable();
+        if (runner == null && props.getJdbc().isJoinTransaction()) {
+            // Reachable when join-transaction is set but the active store is not JDBC, so no runner
+            // was contributed. A no-op rather than a startup failure: the property is namespaced
+            // under idempotency.jdbc, and a shared configuration profile that sets it should not
+            // break an application that deliberately runs on Redis or memory.
+            log.warn("idempotency.jdbc.join-transaction=true has no effect with idempotency.store={} "
+                    + "- transaction joining is only implemented for the JDBC store. Idempotency "
+                    + "remains at-least-once.", props.getStore());
+        }
         return new IdempotencyAspect(store, props, fingerprinter, composer, scopes,
-                idempotencyPayloadObjectMapper, metrics);
+                idempotencyPayloadObjectMapper, metrics, runner);
     }
 
     @Bean
@@ -187,6 +205,33 @@ public class IdempotencyAutoConfiguration {
         @ConditionalOnBean(IdempotencyRecordSweeper.class)
         IdempotencySweeperScheduler idempotencySweeperScheduler(IdempotencyRecordSweeper sweeper, IdempotencyProperties props) {
             return new IdempotencySweeperScheduler(sweeper, props.getJdbc().getSweeperInterval());
+        }
+
+        /**
+         * Present only when transaction joining is switched on. Its presence is what flips the
+         * aspect from separate commits to a single shared one - the aspect itself has no property
+         * check, it just asks whether a runner was wired.
+         *
+         * <p>The transaction manager is resolved through an {@link ObjectProvider} rather than
+         * injected directly so a missing one produces a message naming the property that asked for
+         * it, instead of Spring's generic "no qualifying bean of type PlatformTransactionManager".
+         */
+        @Bean
+        @ConditionalOnBean(DataSource.class)
+        @ConditionalOnProperty(prefix = "idempotency.jdbc", name = "join-transaction")
+        TransactionRunner idempotencyTransactionRunner(ObjectProvider<PlatformTransactionManager> txManager) {
+            PlatformTransactionManager manager = txManager.getIfUnique();
+            if (manager == null) {
+                throw new IllegalStateException(
+                        "idempotency.jdbc.join-transaction=true requires exactly one "
+                        + "PlatformTransactionManager bean, but none was found (or more than one was, "
+                        + "with no @Primary). Transaction joining is what makes the JDBC store "
+                        + "exactly-once; without a transaction manager it cannot work. Either add "
+                        + "spring-boot-starter-jdbc (or another module that auto-configures one), "
+                        + "mark the intended manager @Primary, or set "
+                        + "idempotency.jdbc.join-transaction=false to keep the at-least-once default.");
+            }
+            return new JdbcTransactionRunner(manager);
         }
     }
 

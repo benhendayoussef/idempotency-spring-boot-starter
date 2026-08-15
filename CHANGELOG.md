@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `idempotency.jdbc.join-transaction` (boolean, default `false`). When enabled, the aspect runs the
+  handler and the completion write in one shared transaction, so they commit or roll back together —
+  genuine exactly-once for the JDBC store via `@Idempotent` alone, closing the crash window
+  documented as a 0.1 limitation ([#1](https://github.com/benhendayoussef/idempotency-spring-boot-starter/issues/1)).
+  Default behaviour is unchanged; see the README's "The JDBC store's two modes" for the tradeoffs
+  the property brings with it.
+
+### Changed
+
+- The JDBC store's Gradle module description and the `idempotency.store=jdbc` configuration-metadata
+  hint no longer claim unconditional exactly-once; both now name the property that provides it.
+
 ## [0.1.0] - Unreleased
 
 First public release.

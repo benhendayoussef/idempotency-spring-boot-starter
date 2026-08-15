@@ -2,7 +2,7 @@ plugins {
     id("java-library")
 }
 
-description = "Postgres/JDBC implementation of the idempotency store SPI, exactly-once via transaction join."
+description = "Postgres/JDBC implementation of the idempotency store SPI, with opt-in exactly-once via transaction joining."
 
 dependencies {
     api(project(":idempotency-core"))
