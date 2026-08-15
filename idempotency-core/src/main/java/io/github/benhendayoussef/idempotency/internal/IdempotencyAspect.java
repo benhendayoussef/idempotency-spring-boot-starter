@@ -205,14 +205,31 @@ public class IdempotencyAspect implements Ordered {
         // Captured inside the transaction so it survives an UnexpectedRollbackException raised at
         // commit time, after the handler has already produced its result.
         Object[] handlerResult = new Object[1];
+        boolean[] oversized = new boolean[1];
 
         try {
             Object result = txRunner.inTransaction(() -> {
                 Object r = pjp.proceed();
                 handlerResult[0] = r;
-                completeOrRelease(storeKey, r, fp, ttl, method);
+                IdempotencyRecord record = toRecord(r, fp, method);
+                if (exceedsMaxPayload(record)) {
+                    // Deliberately not released here. store.release() is REQUIRES_NEW, so calling it
+                    // now would suspend this transaction and demand a second connection while the
+                    // first is still held - fine on one thread, a deadlock shape once enough
+                    // concurrent requests saturate the pool. Nothing needs it to be atomic with the
+                    // handler: skipping the completion write is what leaves the response uncached,
+                    // and the claim can be cleaned up once this transaction is closed.
+                    oversized[0] = true;
+                } else {
+                    store.complete(storeKey, record, ttl);
+                }
                 return r;
             });
+
+            if (oversized[0]) {
+                releaseQuietly(storeKey);
+                log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached", storeKey);
+            }
             metrics.executed();
             return result;
 
@@ -239,7 +256,10 @@ public class IdempotencyAspect implements Ordered {
         }
     }
 
-    /** Shared by both paths: store the response, unless it is too large to be worth caching. */
+    /**
+     * Store the response, unless it is too large to be worth caching. Default path only - the joined
+     * path inlines the same decision so it can defer the release until its transaction has closed.
+     */
     private void completeOrRelease(String storeKey, Object result, String fp, Duration ttl, Method method) {
         IdempotencyRecord record = toRecord(result, fp, method);
         if (exceedsMaxPayload(record)) {

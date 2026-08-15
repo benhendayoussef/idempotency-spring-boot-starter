@@ -31,6 +31,7 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -93,6 +94,9 @@ class JdbcTxJoinBehaviorTest extends AbstractIdempotencyBehaviorTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private io.github.benhendayoussef.idempotency.config.IdempotencyProperties props;
 
     @BeforeEach
     void resetJoinFixtures() {
@@ -163,6 +167,9 @@ class JdbcTxJoinBehaviorTest extends AbstractIdempotencyBehaviorTest {
         assertThat(txManager.physicalCommits()).as("one commit covering business data + completion record")
                 .isEqualTo(1);
         assertThat(txManager.physicalRollbacks()).isZero();
+        assertThat(txManager.nestedBegins())
+                .as("one connection per request - a nested transaction would mean two at once")
+                .isZero();
 
         assertThat(businessRowCount(key)).isEqualTo(1);
         assertThat(store.find(storageKeyFor("/m/tx-commit", key)).map(r -> r.state()))
@@ -338,12 +345,53 @@ class JdbcTxJoinBehaviorTest extends AbstractIdempotencyBehaviorTest {
         assertThat(txManager.physicalBegins())
                 .as("two physical transactions: the aspect's, plus the suspended-and-replaced inner one")
                 .isEqualTo(2);
+        assertThat(txManager.nestedBegins())
+                .as("REQUIRES_NEW is the one case where holding two connections at once is the "
+                        + "handler's explicit instruction rather than a library bug")
+                .isEqualTo(1);
         assertThat(businessRowCount(key))
                 .as("the inner transaction rolled back independently").isZero();
         assertThat(store.find(storageKeyFor("/m/tx-requires-new", key)).map(r -> r.state()))
                 .as("...but the outer transaction still committed the completion record - the two "
                         + "did not share a fate, which is the documented REQUIRES_NEW caveat")
                 .contains(State.COMPLETED);
+    }
+
+    // ==============================================================================================
+    // Oversized responses: the one path that could hold two connections at once.
+    // ==============================================================================================
+
+    /**
+     * A response too large to cache makes the aspect {@code release()} the claim instead of
+     * completing it - and {@code release()} is {@code REQUIRES_NEW}. Doing that from inside the
+     * joined transaction would suspend it and demand a second connection while the first is still
+     * held: harmless on one thread, a deadlock shape once enough concurrent requests saturate the
+     * pool. The release is therefore deferred until the transaction has closed.
+     *
+     * <p>Asserted through {@code nestedBegins()} rather than by reasoning about the code, because
+     * this is exactly the kind of property a later refactor can silently undo.
+     */
+    @Test
+    void oversizedResponse_releasesAfterTheTransactionClosesRatherThanNestingASecondOne() throws Exception {
+        var originalMax = props.getMaxPayloadSize();
+        props.setMaxPayloadSize(org.springframework.util.unit.DataSize.ofBytes(1));
+        try {
+            String key = "txjoin-oversize-" + System.nanoTime();
+
+            mockMvc.perform(post("/m/tx-commit").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{\"id\":\"" + key + "\"}"))
+                    .andExpect(status().isCreated());
+
+            assertThat(txManager.nestedBegins())
+                    .as("the REQUIRES_NEW release must not run while the joined transaction is open")
+                    .isZero();
+
+            // The outcome itself is unchanged: business data committed, nothing cached, key free.
+            assertThat(businessRowCount(key)).isEqualTo(1);
+            assertThat(store.find(storageKeyFor("/m/tx-commit", key))).isEmpty();
+        } finally {
+            props.setMaxPayloadSize(originalMax);
+        }
     }
 
     // ==============================================================================================
@@ -415,6 +463,7 @@ class JdbcTxJoinBehaviorTest extends AbstractIdempotencyBehaviorTest {
         private final AtomicInteger physicalCommits = new AtomicInteger();
         private final AtomicInteger physicalRollbacks = new AtomicInteger();
         private final AtomicInteger failedCommits = new AtomicInteger();
+        private final AtomicInteger nestedBegins = new AtomicInteger();
 
         CountingTransactionManager(PlatformTransactionManager delegate) {
             this.delegate = delegate;
@@ -426,6 +475,7 @@ class JdbcTxJoinBehaviorTest extends AbstractIdempotencyBehaviorTest {
             physicalCommits.set(0);
             physicalRollbacks.set(0);
             failedCommits.set(0);
+            nestedBegins.set(0);
         }
 
         int getTransactionCalls() {
@@ -448,15 +498,29 @@ class JdbcTxJoinBehaviorTest extends AbstractIdempotencyBehaviorTest {
             return failedCommits.get();
         }
 
+        /** Physical transactions opened while another was already held - i.e. two connections at once. */
+        int nestedBegins() {
+            return nestedBegins.get();
+        }
+
         @Override
         public TransactionStatus getTransaction(TransactionDefinition definition) {
             getTransactionCalls.incrementAndGet();
+            // Read before delegating: afterwards the new transaction is itself active, so every
+            // begin would look nested.
+            boolean alreadyInsideOne = TransactionSynchronizationManager.isActualTransactionActive();
             TransactionStatus status = delegate.getTransaction(definition);
             // isNewTransaction() is what separates a real BEGIN from a participant joining one that
             // is already open - counting calls alone would make joining look identical to not
             // joining, which is the whole thing under test.
             if (status.isNewTransaction()) {
                 physicalBegins.incrementAndGet();
+                if (alreadyInsideOne) {
+                    // A second physical transaction opened while another was still held: two
+                    // connections checked out by one request. Correct for an explicit
+                    // REQUIRES_NEW, a pool-exhaustion deadlock shape anywhere else.
+                    nestedBegins.incrementAndGet();
+                }
             }
             return status;
         }

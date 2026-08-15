@@ -33,6 +33,12 @@ The cost of (b) is documented rather than eliminated: the replayed 4xx body may 
 rows that rolled back, so don't build a 4xx response out of rows written in the same request. That
 hazard is identical in the default mode.
 
+**One defect found in the new path and fixed before merge:** oversized responses (over
+`idempotency.max-payload-size`) are released rather than cached, and `release()` is `REQUIRES_NEW` —
+which in the first version ran inside the shared transaction, checking out a second connection while
+the first was held. Deadlock shape at pool saturation. The release now happens after the transaction
+closes, and a test asserts no nested transaction is ever opened on the normal joined path.
+
 **Known gap, documented not fixed:** a handler annotated `@Transactional(REQUIRES_NEW)` opts out of
 joining, so atomicity does not hold for it — its transaction and the completion record no longer
 share a fate. `REQUIRES_NEW` is an explicit instruction not to participate and overriding it would

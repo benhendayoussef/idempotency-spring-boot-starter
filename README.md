@@ -206,6 +206,10 @@ transactional ones:
 - **Replays still open zero transactions.** The aspect answers from the store without calling
   `proceed()`, so the transaction manager is never touched — the whole reason for the aspect
   ordering, and asserted directly in the test suite.
+- **One connection per in-flight request**, held for the handler's whole duration. Size your
+  connection pool for concurrent in-flight requests, not just for query time. The library never
+  nests a second transaction inside the first (asserted); the only exception is a handler that asks
+  for `REQUIRES_NEW` itself.
 - Self-invocation bypasses the proxy here exactly as it does for `@Transactional`: an inner call
   gets neither annotation's behaviour.
 
