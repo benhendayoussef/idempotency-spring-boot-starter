@@ -234,6 +234,18 @@ public class IdempotencyProperties {
         /** How often the sweeper runs, when enabled. */
         private Duration sweeperInterval = Duration.ofMinutes(15);
 
+        /**
+         * Run the handler and the completion write in one shared transaction, so they commit or roll
+         * back together (exactly-once) instead of committing separately (at-least-once).
+         *
+         * <p>Off by default because it changes execution semantics for every advised method, not
+         * just transactional ones: a handler with no {@code @Transactional} of its own is pulled
+         * into a transaction it never asked for, and a handler's own
+         * {@code @Transactional(timeout = ...)} stops applying once it joins. Opt in per
+         * application, once those implications have been checked.
+         */
+        private boolean joinTransaction = false;
+
         public String getTableName() {
             return tableName;
         }
@@ -256,6 +268,14 @@ public class IdempotencyProperties {
 
         public void setSweeperInterval(Duration sweeperInterval) {
             this.sweeperInterval = sweeperInterval;
+        }
+
+        public boolean isJoinTransaction() {
+            return joinTransaction;
+        }
+
+        public void setJoinTransaction(boolean joinTransaction) {
+            this.joinTransaction = joinTransaction;
         }
     }
 }

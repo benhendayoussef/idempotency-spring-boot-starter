@@ -6,6 +6,7 @@ import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
+import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import java.io.IOException;
@@ -19,10 +20,13 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,13 +34,16 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.SimpleDriverDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * The Step 8 slice test: asserts the store conditionals fire correctly with/without Redis (or a
  * DataSource) on the classpath, instead of the classic "my starter does nothing when the user
  * has a custom bean" failure mode.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class IdempotencyAutoConfigurationTest {
 
     private final WebApplicationContextRunner runner = new WebApplicationContextRunner()
@@ -195,6 +202,69 @@ class IdempotencyAutoConfigurationTest {
                 });
     }
 
+    // --- idempotency.jdbc.join-transaction wiring (C4/C5/C6) ---------------------------------
+
+    @Test
+    void joinTransactionOffByDefault_contributesNoTransactionRunner() {
+        // C4: the property defaults to false, and its absence must leave the aspect on the v0.1
+        // separate-commits path. The aspect has no property check of its own - it asks whether a
+        // runner bean was wired - so "no runner bean" is the assertion that matters.
+        runner.withUserConfiguration(DataSourceConfiguration.class, TransactionManagerConfiguration.class)
+                .withPropertyValues("idempotency.store=jdbc")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).doesNotHaveBean(TransactionRunner.class);
+                });
+    }
+
+    @Test
+    void joinTransactionOnWithAJdbcStore_contributesATransactionRunner() {
+        runner.withUserConfiguration(DataSourceConfiguration.class, TransactionManagerConfiguration.class)
+                .withPropertyValues("idempotency.store=jdbc", "idempotency.jdbc.join-transaction=true")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(TransactionRunner.class);
+                });
+    }
+
+    /**
+     * Row 11 / C5. The property lives under {@code idempotency.jdbc}, so setting it while running on
+     * Redis is a configuration mistake, not a reason to refuse to start - a shared profile that
+     * flips it must not take down every Redis-backed service that inherits the profile. Warn and
+     * carry on with the v0.1 behaviour.
+     */
+    @Test
+    void joinTransactionOnWithARedisStore_noOpsAndWarnsRatherThanFailingStartup(CapturedOutput output) {
+        runner.withUserConfiguration(RedisTemplateConfiguration.class)
+                .withPropertyValues("idempotency.store=redis", "idempotency.jdbc.join-transaction=true")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(IdempotencyAspect.class);
+                    assertThat(ctx).doesNotHaveBean(TransactionRunner.class);
+                    assertThat(output).contains("idempotency.jdbc.join-transaction=true has no effect");
+                });
+    }
+
+    /**
+     * Row 12 / C6. The opposite call from C5: here the user asked for exactly-once on the store that
+     * can deliver it, and silently giving them at-least-once instead would be the worst outcome of
+     * the three. Fail at startup, naming the property that asked for the missing bean - not a
+     * NullPointerException on the first request in production.
+     */
+    @Test
+    void joinTransactionOnWithNoTransactionManagerBean_failsStartupNamingTheProperty() {
+        // No TransactionManagerConfiguration and no TransactionAutoConfiguration in this runner, so
+        // the DataSource exists with nothing to manage transactions on it.
+        runner.withUserConfiguration(DataSourceConfiguration.class)
+                .withPropertyValues("idempotency.store=jdbc", "idempotency.jdbc.join-transaction=true")
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("idempotency.jdbc.join-transaction=true")
+                            .hasMessageContaining("PlatformTransactionManager");
+                });
+    }
+
     @Test
     void autoConfigurationImportsResourceReferencesRealLoadableClasses() throws IOException, ClassNotFoundException {
         // Load the resource and Class.forName each line - a typo here is invisible to a plain
@@ -272,6 +342,14 @@ class IdempotencyAutoConfigurationTest {
             var ds = new SimpleDriverDataSource();
             ds.setUrl("jdbc:postgresql://localhost:5432/test");
             return ds;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TransactionManagerConfiguration {
+        @Bean
+        PlatformTransactionManager transactionManager(DataSource dataSource) {
+            return new DataSourceTransactionManager(dataSource);
         }
     }
 

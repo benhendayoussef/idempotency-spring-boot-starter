@@ -324,7 +324,10 @@ class IdempotencyAspectMockMvcTest {
                 Map<IdempotencyScope, ScopeResolver> scopes, ObjectMapper payloadMapper,
                 IdempotencyMetrics metrics) {
             props.setScope(IdempotencyScope.GLOBAL);
-            return new IdempotencyAspect(store, props, fingerprinter, composer, scopes, payloadMapper, metrics);
+            // null TransactionRunner: these tests run against the in-memory store, which has no
+            // transaction to join. That is also the default every consumer gets.
+            return new IdempotencyAspect(store, props, fingerprinter, composer, scopes, payloadMapper,
+                    metrics, null);
         }
 
         @Bean

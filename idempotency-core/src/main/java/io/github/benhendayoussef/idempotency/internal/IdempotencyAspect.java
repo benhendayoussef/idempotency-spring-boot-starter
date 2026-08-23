@@ -72,13 +72,24 @@ public class IdempotencyAspect implements Ordered {
     private final Map<IdempotencyScope, ScopeResolver> scopes;
     private final ObjectMapper payloadMapper;
     private final IdempotencyMetrics metrics;
+    /**
+     * Null unless transaction joining is enabled and a JDBC store is active. Null means the v0.1
+     * separate-commits behaviour, which is the default.
+     */
+    private final TransactionRunner txRunner;
     private final ExpressionParser spelParser = new SpelExpressionParser();
     private final ParameterNameDiscoverer paramNames = new DefaultParameterNameDiscoverer();
 
+    /**
+     * @param txRunner {@code null} for the default separate-commits behaviour. Kept as a required
+     *                 argument rather than an overload so every call site has to state which mode it
+     *                 is building - a convenience constructor here would make "no transaction
+     *                 joining" the silent case, and that is the case worth being explicit about.
+     */
     public IdempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes, ObjectMapper payloadMapper,
-            IdempotencyMetrics metrics) {
+            IdempotencyMetrics metrics, TransactionRunner txRunner) {
         this.store = store;
         this.props = props;
         this.fingerprinter = fingerprinter;
@@ -86,6 +97,7 @@ public class IdempotencyAspect implements Ordered {
         this.scopes = scopes;
         this.payloadMapper = payloadMapper;
         this.metrics = metrics;
+        this.txRunner = txRunner;
     }
 
     @Around("@annotation(idempotent)")
@@ -153,26 +165,152 @@ public class IdempotencyAspect implements Ordered {
 
     private Object execute(ProceedingJoinPoint pjp, String storeKey, String fp, Duration ttl, Method method)
             throws Throwable {
+        // around() has already claimed and committed the key by the time we get here, outside any
+        // transaction this method opens. That ordering is load-bearing: if the IN_PROGRESS row only
+        // became visible when the handler's transaction commits, every concurrent duplicate would
+        // race straight past the claim instead of seeing it.
+        return txRunner == null
+                ? executeSeparateCommits(pjp, storeKey, fp, ttl, method)
+                : executeJoined(pjp, storeKey, fp, ttl, method);
+    }
+
+    /**
+     * Default path: the handler commits its own transaction (if it has one), then the completion
+     * write commits separately. At-least-once — a crash between the two leaves business data with
+     * no completion record. Unchanged from v0.1.
+     */
+    private Object executeSeparateCommits(
+            ProceedingJoinPoint pjp, String storeKey, String fp, Duration ttl, Method method) throws Throwable {
         try {
             Object result = pjp.proceed();
-            IdempotencyRecord record = toRecord(result, fp, method);
-            if (exceedsMaxPayload(record)) {
-                store.release(storeKey);
-                log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached", storeKey);
-            } else {
-                store.complete(storeKey, record, ttl);
-            }
+            completeOrRelease(storeKey, result, fp, ttl, method);
             metrics.executed();
             return result;
         } catch (Throwable t) {
-            if (shouldRelease(t)) {
-                store.release(storeKey);
-                metrics.released();
-            } else {
-                store.complete(storeKey, toErrorRecord(t, fp), ttl);
-            }
+            settleFailure(storeKey, fp, ttl, t);
             throw t;
         }
+    }
+
+    /**
+     * Joined path ({@code idempotency.jdbc.join-transaction=true}): the handler and the completion
+     * write share one transaction, so they commit or roll back together — exactly-once.
+     *
+     * <p>The handler's own {@code @Transactional(REQUIRED)} joins this transaction rather than
+     * opening and closing its own beforehand, which is what makes the single commit possible.
+     */
+    private Object executeJoined(
+            ProceedingJoinPoint pjp, String storeKey, String fp, Duration ttl, Method method) throws Throwable {
+        // Captured inside the transaction so it survives an UnexpectedRollbackException raised at
+        // commit time, after the handler has already produced its result.
+        Object[] handlerResult = new Object[1];
+        boolean[] oversized = new boolean[1];
+
+        try {
+            Object result = txRunner.inTransaction(() -> {
+                Object r = pjp.proceed();
+                handlerResult[0] = r;
+                IdempotencyRecord record = toRecord(r, fp, method);
+                if (exceedsMaxPayload(record)) {
+                    // Deliberately not released here. store.release() is REQUIRES_NEW, so calling it
+                    // now would suspend this transaction and demand a second connection while the
+                    // first is still held - fine on one thread, a deadlock shape once enough
+                    // concurrent requests saturate the pool. Nothing needs it to be atomic with the
+                    // handler: skipping the completion write is what leaves the response uncached,
+                    // and the claim can be cleaned up once this transaction is closed.
+                    oversized[0] = true;
+                } else {
+                    store.complete(storeKey, record, ttl);
+                }
+                return r;
+            });
+
+            if (oversized[0]) {
+                releaseQuietly(storeKey);
+                log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached", storeKey);
+            }
+            metrics.executed();
+            return result;
+
+        } catch (Throwable t) {
+            if (isUnexpectedRollback(t)) {
+                // The handler called setRollbackOnly() and returned normally, so it marked the
+                // *shared* transaction rollback-only and we only learn about it here, at commit.
+                // The completion write rolled back with it, which is the correct exactly-once
+                // outcome. Release the claim so the key is immediately reclaimable rather than
+                // stranded as IN_PROGRESS until its TTL expires.
+                //
+                // The handler's result is still returned: it chose to roll back and chose to
+                // return success, and v0.1 surfaced that same response. Changing it to a 500 is a
+                // separate decision, not this property's job.
+                releaseQuietly(storeKey);
+                metrics.released();
+                log.warn("Handler for idempotency key {} marked the transaction rollback-only; "
+                        + "nothing was committed and the key has been released", storeKey);
+                return handlerResult[0];
+            }
+
+            settleFailure(storeKey, fp, ttl, t);
+            throw t;
+        }
+    }
+
+    /**
+     * Store the response, unless it is too large to be worth caching. Default path only - the joined
+     * path inlines the same decision so it can defer the release until its transaction has closed.
+     */
+    private void completeOrRelease(String storeKey, Object result, String fp, Duration ttl, Method method) {
+        IdempotencyRecord record = toRecord(result, fp, method);
+        if (exceedsMaxPayload(record)) {
+            store.release(storeKey);
+            log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached", storeKey);
+        } else {
+            store.complete(storeKey, record, ttl);
+        }
+    }
+
+    /**
+     * Applies the failure policy after the handler threw.
+     *
+     * <p>In joined mode the wrapping transaction has already rolled back and been unbound from the
+     * thread by the time this runs, so {@code store.complete()}'s {@code REQUIRED} propagation
+     * starts a fresh transaction — which is exactly what the 4xx-keeps policy needs. A terminal 4xx
+     * is a deterministic client error and stays replayable even though the business data it
+     * described was discarded, matching v0.1 in both modes.
+     */
+    private void settleFailure(String storeKey, String fp, Duration ttl, Throwable t) {
+        if (shouldRelease(t)) {
+            store.release(storeKey);
+            metrics.released();
+        } else {
+            store.complete(storeKey, toErrorRecord(t, fp), ttl);
+        }
+    }
+
+    /** Releasing is best-effort cleanup; failing here must not mask the outcome being reported. */
+    private void releaseQuietly(String storeKey) {
+        try {
+            store.release(storeKey);
+        } catch (RuntimeException e) {
+            log.warn("Failed to release idempotency key {} after a rolled-back transaction; "
+                    + "it will be reclaimed when its TTL expires", storeKey, e);
+        }
+    }
+
+    /**
+     * Detects Spring's {@code UnexpectedRollbackException} by name.
+     *
+     * <p>By name because {@code idempotency-core} has no {@code spring-tx} dependency — the aspect
+     * has to work when the Redis or in-memory store is active and no transaction manager exists.
+     * The cause chain is walked too, since a transaction manager may wrap it.
+     */
+    private static boolean isUnexpectedRollback(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
+            if ("org.springframework.transaction.UnexpectedRollbackException".equals(c.getClass().getName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Object handleStoreFailure(ProceedingJoinPoint pjp, RuntimeException cause) throws Throwable {
