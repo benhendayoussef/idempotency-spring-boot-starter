@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-23
+
 ### Added
 
 - `idempotency.jdbc.join-transaction` (boolean, default `false`). When enabled, the aspect runs the
@@ -18,7 +20,7 @@ All notable changes to this project are documented in this file.
 - The JDBC store's Gradle module description and the `idempotency.store=jdbc` configuration-metadata
   hint no longer claim unconditional exactly-once; both now name the property that provides it.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-08-02
 
 First public release.
 
@@ -44,7 +46,7 @@ First public release.
 
 - The JDBC store is at-least-once via `@Idempotent` alone; genuine exactly-once requires the
   application to call `IdempotencyStore.complete()` from inside a transaction it already holds
-  open. Transaction-joining the completion write automatically is targeted for 0.2.
+  open. (Resolved in 0.2.0 by `idempotency.jdbc.join-transaction`.)
 - `on-conflict=WAIT` under a large concurrent duplicate burst can measurably degrade whole-application
   thread-pool responsiveness, not just the affected endpoint.
 - `on-store-failure=proceed`'s worst-case request latency depends entirely on the consumer's own
