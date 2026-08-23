@@ -24,8 +24,8 @@ replayed** — not a re-execution, not an error.
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.1.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-redis:0.1.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.2.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.2.0")
 }
 ```
 
@@ -51,8 +51,8 @@ The JDBC store needs more setup than swapping one dependency — all of the foll
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.1.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.1.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.2.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.2.0")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     runtimeOnly("org.postgresql:postgresql")
 }
@@ -242,7 +242,7 @@ Nobody else publishes this table. If you only remember one thing from this READM
 "idempotent" and "exactly-once" are not the same claim, and getting the latter from the JDBC store
 takes more than swapping in the dependency.
 
-## Limitations (v0.1)
+## Limitations
 
 Being loud about these is what makes a library trustworthy:
 
@@ -301,8 +301,6 @@ polymorphic-deserialization gadget vector.
 - [`docs/design-decisions.md`](docs/design-decisions.md) — the architectural reasoning: why AOP
   over a servlet filter, the atomic claim, the failure policy, and what "exactly-once" does and
   doesn't mean here.
-- [`docs/explained/`](docs/explained/00-overview.md) — a class-by-class walkthrough of the
-  entire codebase.
 
 ## Extending
 
@@ -325,6 +323,7 @@ app's own `ObjectMapper`).
 
 | Starter version | Spring Boot | Java |
 |---|---|---|
+| 0.2.x | 4.1.x (Spring Framework 7) | 17+ |
 | 0.1.x | 4.1.x (Spring Framework 7) | 17+ |
 
 ## Roadmap
