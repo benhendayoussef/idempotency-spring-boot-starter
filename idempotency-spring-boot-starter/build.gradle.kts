@@ -19,9 +19,9 @@ dependencies {
     testImplementation(project(":idempotency-store-jdbc"))
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
-    // Spring Boot 4 split @AutoConfigureMockMvc out of spring-boot-test-autoconfigure into its
-    // own module; spring-boot-starter-test does not pull it in transitively.
-    testImplementation("org.springframework.boot:spring-boot-webmvc-test")
+    // No spring-boot-webmvc-test here on purpose: that module is Boot 4 only, and depending on it
+    // is what used to pin this suite to a single Boot generation. MockMvcTestConfiguration builds
+    // MockMvc from spring-test instead, which is identical on Boot 3 and 4.
     testImplementation("org.springframework.boot:spring-boot-starter-web")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")

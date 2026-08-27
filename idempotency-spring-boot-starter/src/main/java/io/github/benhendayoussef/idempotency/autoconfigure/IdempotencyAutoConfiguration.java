@@ -32,6 +32,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -56,9 +57,29 @@ import org.springframework.transaction.PlatformTransactionManager;
 // Referenced by name, not by class literal: both are optional (compileOnly) and may not be on
 // the classpath at all, unlike a hard `after = {Foo.class}` this doesn't fail attribute
 // introspection when the referenced autoconfiguration is absent.
+//
+// Both Boot generations are listed because Boot 4 moved these autoconfigurations into per-module
+// packages. Naming only one generation would not fail on the other - it would silently match
+// nothing, so the store beans could be evaluated before the DataSource or StringRedisTemplate they
+// depend on exists. A name matching nothing is simply ignored, which is what makes listing all four
+// safe on both. See IdempotencyAutoConfigurationOrderingTest.
 @AutoConfiguration(afterName = {
+        // Spring Boot 4.x
         "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration",
-        "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration"
+        "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
+        // Spring Boot 3.x
+        "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration",
+        "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
+        // Jackson, both generations. Not about bean availability like the four above - this one
+        // decides who owns the application-wide ObjectMapper. idempotencyPayloadObjectMapper is a
+        // bean of type ObjectMapper, and Spring Boot declares its own @Primary one behind
+        // @ConditionalOnMissingBean. Register ours first and Boot backs off entirely, so the
+        // starter-internal mapper silently becomes the mapper the application serializes every HTTP
+        // response with - and any IdempotencyObjectMapperCustomizer leaks into the app's own wire
+        // format. Ordering after Jackson means Boot's @Primary mapper always wins for the
+        // application and ours stays private to replay storage.
+        "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
+        "org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration"
 })
 @ConditionalOnProperty(prefix = "idempotency", name = "enabled", matchIfMissing = true)
 @ConditionalOnWebApplication(type = Type.SERVLET)
@@ -142,7 +163,8 @@ public class IdempotencyAutoConfiguration {
     public IdempotencyAspect idempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes,
-            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            @Qualifier("idempotencyPayloadObjectMapper") ObjectMapper idempotencyPayloadObjectMapper,
+            IdempotencyMetrics metrics,
             ObjectProvider<TransactionRunner> transactionRunner) {
         TransactionRunner runner = transactionRunner.getIfAvailable();
         if (runner == null && props.getJdbc().isJoinTransaction()) {
@@ -176,7 +198,8 @@ public class IdempotencyAutoConfiguration {
         @ConditionalOnMissingBean(IdempotencyStore.class)
         @ConditionalOnBean(StringRedisTemplate.class)
         IdempotencyStore redisIdempotencyStore(StringRedisTemplate redisTemplate,
-                ObjectMapper idempotencyPayloadObjectMapper, IdempotencyProperties props) {
+                @Qualifier("idempotencyPayloadObjectMapper") ObjectMapper idempotencyPayloadObjectMapper,
+                IdempotencyProperties props) {
             return new RedisIdempotencyStore(redisTemplate, idempotencyPayloadObjectMapper,
                     props.getRedis().getKeyPrefix());
         }

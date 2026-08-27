@@ -30,9 +30,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -55,7 +55,7 @@ import org.springframework.web.servlet.HandlerMapping;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK,
         classes = AbstractIdempotencyBehaviorTest.TestApp.class)
-@AutoConfigureMockMvc
+@Import(MockMvcTestConfiguration.class)
 abstract class AbstractIdempotencyBehaviorTest {
 
     @Autowired

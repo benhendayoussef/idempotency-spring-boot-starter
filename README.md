@@ -326,8 +326,13 @@ app's own `ObjectMapper`).
 
 | Starter version | Spring Boot | Java |
 |---|---|---|
+| 0.3.x | **3.5.x and 4.1.x** | 17+ |
 | 0.2.x | 4.1.x (Spring Framework 7) | 17+ |
 | 0.1.x | 4.1.x (Spring Framework 7) | 17+ |
+
+From 0.3.0 there is **one artifact for both Spring Boot generations** - no `-boot3` classifier and no
+separate version line. Every Spring API the library uses exists in both, so it is compiled against the
+lower bound and the full suite runs against both in CI on every push.
 
 ## Roadmap
 
