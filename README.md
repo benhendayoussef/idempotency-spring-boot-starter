@@ -130,6 +130,7 @@ a silent execution of the wrong payload.
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
+| `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
 
 ## Store comparison
 
@@ -304,6 +305,39 @@ polymorphic-deserialization gadget vector.
 - [`docs/design-decisions.md`](docs/design-decisions.md) — the architectural reasoning: why AOP
   over a servlet filter, the atomic claim, the failure policy, and what "exactly-once" does and
   doesn't mean here.
+
+## Metrics
+
+If your application already has a Micrometer `MeterRegistry` (adding `spring-boot-starter-actuator`
+is enough), the starter publishes counters automatically. There is nothing to configure.
+
+Everything lands on **one** counter, `idempotency.requests`, separated by an `outcome` tag:
+
+| `outcome` | Meaning |
+|---|---|
+| `executed` | Handler ran; the response was stored for replay |
+| `replayed` | A duplicate was answered from the store without executing |
+| `replayed_after_wait` | A `WAIT`-policy duplicate blocked, then replayed the first call’s response |
+| `released` | The key was released so a retry can re-execute (5xx, or a timeout) |
+| `conflict` | A duplicate arrived while the first was in flight and got a 409 |
+| `wait_timeout` | A `WAIT`-policy duplicate gave up waiting |
+| `fingerprint_mismatch` | Same key, different request body - the 422 case |
+| `missing_key` | No idempotency key on the request |
+| `store_failure` | The store was unreachable |
+| `principal_missing` | A `user`/`tenant`-scoped request had no resolvable principal |
+
+One name with a tag rather than ten names is deliberate: it lets you write a replay rate as a single
+ratio, and an outcome added in a later version shows up in your existing queries instead of being
+invisible until you update them.
+
+```promql
+# Replay rate: the share of idempotent traffic served without re-executing
+sum(rate(idempotency_requests_total{outcome="replayed"}[5m]))
+  / sum(rate(idempotency_requests_total[5m]))
+```
+
+Set `idempotency.metrics.enabled=false` to keep the no-op implementation, or register your own
+`IdempotencyMetrics` bean to route the same events somewhere else - the starter backs off from both.
 
 ## Extending
 

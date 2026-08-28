@@ -73,6 +73,8 @@ public class IdempotencyProperties {
     private final Redis redis = new Redis();
     private final Jdbc jdbc = new Jdbc();
 
+    private final Metrics metrics = new Metrics();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -197,6 +199,10 @@ public class IdempotencyProperties {
         return redis;
     }
 
+    public Metrics getMetrics() {
+        return metrics;
+    }
+
     public Jdbc getJdbc() {
         return jdbc;
     }
@@ -276,6 +282,24 @@ public class IdempotencyProperties {
 
         public void setJoinTransaction(boolean joinTransaction) {
             this.joinTransaction = joinTransaction;
+        }
+    }
+
+    public static class Metrics {
+
+        /**
+         * Publish idempotency counters to Micrometer when a MeterRegistry is present. Set false to
+         * keep the no-op implementation even in an application that has a registry - for instance
+         * where cardinality budgets are tight and these counters are not wanted.
+         */
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 }
