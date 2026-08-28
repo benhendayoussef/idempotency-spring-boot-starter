@@ -125,6 +125,7 @@ a silent execution of the wrong payload.
 | `idempotency.problem-details` | `true` | Registers the built-in RFC 9457 exception advice |
 | `idempotency.max-payload-size` | `256KB` | Larger responses execute normally but aren't cached for replay |
 | `idempotency.release-on` | `five_xx,timeout` | Outcomes that release instead of complete the key. Note the underscore: Spring's relaxed binding needs `five_xx`, not `5xx` |
+| `idempotency.caffeine.maximum-size` | `10000` | Ceiling on entries held by the Caffeine store; LRU beyond it |
 | `idempotency.redis.key-prefix` | `idempotency:` | |
 | `idempotency.jdbc.table-name` | `idempotency_record` | |
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
@@ -255,6 +256,9 @@ Being loud about these is what makes a library trustworthy:
 - Does not work on streaming / SSE / `StreamingResponseBody` returns.
 - Does not handle multipart bodies in the fingerprint.
 - Postgres only for the JDBC store (MySQL is on the roadmap).
+- `store=memory` never evicts expired entries, so it grows for as long as the process lives. It is
+  meant for tests and local development. For a single instance that stays up, use `store=caffeine`,
+  which has the same semantics plus real TTL eviction and a size ceiling.
 - Servlet stack only (WebFlux is on the roadmap).
 - AOP-based: self-invocation bypasses the proxy, same as `@Transactional`. A startup check warns
   if `@Idempotent` is found on a non-public method.

@@ -79,6 +79,10 @@
     {
       "name": "idempotency.metrics.enabled",
       "description": "Publish idempotency counters to Micrometer when a MeterRegistry is present. All outcomes land on one counter, idempotency.requests, tagged by outcome (executed, replayed, released, conflict, ...). Set false to keep the no-op implementation even in an application that has a registry."
+    },
+    {
+      "name": "idempotency.caffeine.maximum-size",
+      "description": "Maximum entries the Caffeine store holds. Records normally leave by TTL; this is the backstop for when new keys arrive faster than old ones expire, so memory stays bounded. Least-recently-used entries are evicted first."
     }
   ],
   "hints": [
@@ -96,6 +100,10 @@
         {
           "value": "jdbc",
           "description": "Durable, at-least-once by default; exactly-once with idempotency.jdbc.join-transaction=true. Requires a DataSource."
+        },
+        {
+          "value": "caffeine",
+          "description": "Single-instance, non-durable, with real TTL eviction and a bounded size. Requires idempotency-store-caffeine."
         },
         {
           "value": "memory",

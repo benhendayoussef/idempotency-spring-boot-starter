@@ -20,6 +20,7 @@ import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.internal.scope.GlobalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.PrincipalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.TenantScopeResolver;
+import io.github.benhendayoussef.idempotency.store.caffeine.internal.CaffeineIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencyRecordSweeper;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySweeperScheduler;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
@@ -255,6 +256,21 @@ public class IdempotencyAutoConfiguration {
                         + "idempotency.jdbc.join-transaction=false to keep the at-least-once default.");
             }
             return new JdbcTransactionRunner(manager);
+        }
+    }
+
+    // Guards on the store class too, not just the property: idempotency-store-caffeine is optional
+    // (compileOnly here), so a user who set store=caffeine without adding the dependency must fall
+    // through to the fallback autoconfiguration and get its actionable message, not a NoClassDefFound.
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(CaffeineIdempotencyStore.class)
+    @ConditionalOnProperty(prefix = "idempotency", name = "store", havingValue = "caffeine")
+    static class CaffeineStoreConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(IdempotencyStore.class)
+        IdempotencyStore caffeineIdempotencyStore(IdempotencyProperties props) {
+            return new CaffeineIdempotencyStore(props.getCaffeine().getMaximumSize());
         }
     }
 

@@ -72,6 +72,7 @@ public class IdempotencyProperties {
 
     private final Redis redis = new Redis();
     private final Jdbc jdbc = new Jdbc();
+    private final Caffeine caffeine = new Caffeine();
 
     private final Metrics metrics = new Metrics();
 
@@ -195,6 +196,10 @@ public class IdempotencyProperties {
         this.releaseOn = releaseOn;
     }
 
+    public Caffeine getCaffeine() {
+        return caffeine;
+    }
+
     public Redis getRedis() {
         return redis;
     }
@@ -207,13 +212,32 @@ public class IdempotencyProperties {
         return jdbc;
     }
 
-    public enum StoreType { AUTO, REDIS, JDBC, MEMORY }
+    public enum StoreType { AUTO, REDIS, JDBC, CAFFEINE, MEMORY }
 
     public enum OnStoreFailure { PROCEED, FAIL }
 
     public enum OnMissingPrincipal { GLOBAL, SKIP, REJECT }
 
     public enum ReleaseOn { FIVE_XX, TIMEOUT }
+
+    public static class Caffeine {
+
+        /**
+         * Ceiling on entries held. Eviction normally happens by TTL; this is the backstop for when
+         * new keys arrive faster than old ones expire, so memory stays bounded instead of tracking
+         * traffic. Least-recently-used entries go first, which for idempotency keys means the ones
+         * least likely to still be retried.
+         */
+        private long maximumSize = 10_000;
+
+        public long getMaximumSize() {
+            return maximumSize;
+        }
+
+        public void setMaximumSize(long maximumSize) {
+            this.maximumSize = maximumSize;
+        }
+    }
 
     public static class Redis {
 

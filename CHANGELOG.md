@@ -10,6 +10,10 @@ All notable changes to this project are documented in this file.
   lands on one counter, `idempotency.requests`, tagged by `outcome` - so a replay rate is a single
   ratio rather than a hard-coded list of metric names. `idempotency.metrics.enabled=false` opts out;
   a user-supplied `IdempotencyMetrics` bean still wins.
+- `idempotency-store-caffeine`: a single-instance store with real TTL eviction and a bounded size
+  (`idempotency.caffeine.maximum-size`). The built-in `store=memory` treats expired entries as
+  absent but never removes them, so it grows for the life of the process - fine for tests, a slow
+  leak for a service that stays up.
 
 ## [0.2.0] - 2026-08-23
 
