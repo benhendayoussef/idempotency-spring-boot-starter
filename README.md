@@ -254,7 +254,7 @@ Being loud about these is what makes a library trustworthy:
 - Does not work on streaming / SSE / `StreamingResponseBody` returns.
 - Does not handle multipart bodies in the fingerprint.
 - Postgres only for the JDBC store (MySQL is on the roadmap).
-- Servlet stack only (WebFlux is on the roadmap).
+- WebFlux support covers `Mono` only, with a blocking store on `boundedElastic` and `scope=global`. See the WebFlux section.
 - AOP-based: self-invocation bypasses the proxy, same as `@Transactional`. A startup check warns
   if `@Idempotent` is found on a non-public method.
 - `idempotency.scope` defaults to `global` (no Spring Security needed) precisely so the Quickstart
@@ -304,6 +304,44 @@ polymorphic-deserialization gadget vector.
 - [`docs/design-decisions.md`](docs/design-decisions.md) — the architectural reasoning: why AOP
   over a servlet filter, the atomic claim, the failure policy, and what "exactly-once" does and
   doesn't mean here.
+
+## WebFlux
+
+Add `idempotency-webflux` and `@Idempotent` works on reactive handlers that return `Mono`:
+
+```kotlin
+dependencies {
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-webflux:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
+}
+```
+
+```java
+@Idempotent
+@PostMapping("/orders")
+public Mono<ResponseEntity<OrderResponse>> placeOrder(@RequestBody OrderRequest request) { ... }
+```
+
+Nothing else to configure. The servlet and reactive aspects are mutually exclusive by construction,
+so an application gets exactly one.
+
+One thing is genuinely better here: `on-conflict=wait` occupies **no thread** while it waits, because
+the delay is a timer rather than a sleep. The thread-pool exhaustion documented under Limitations for
+the servlet stack does not apply.
+
+Three things to know before adopting it:
+
+- **Only `Mono` is advised.** A `Flux` is a stream, and this library replays a single captured
+  response - the same reason the servlet side does not support streaming. A `Flux`-returning handler
+  passes through untouched, with a WARN at startup rather than silent half-support.
+- **Stores are still blocking**, so store calls are scheduled onto `boundedElastic`. Correct, but an
+  idempotent endpoint costs two thread handoffs a plain one does not. A reactive store SPI (R2DBC,
+  reactive Redis) would remove that and is not in 0.3.0.
+- **`idempotency.scope` must be `global`.** `user` and `tenant` resolve the principal from
+  `SecurityContextHolder`, which is a ThreadLocal with no meaning on a reactive stack. Rather than
+  quietly falling back to global - which would share idempotency keys across users - startup fails
+  with an explanation.
 
 ## Extending
 

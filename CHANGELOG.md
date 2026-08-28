@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `idempotency-webflux`: `@Idempotent` on reactive handlers returning `Mono`. The WAIT policy holds
+  no thread on this stack. Limitations, all documented: `Mono` only, blocking stores scheduled onto
+  `boundedElastic`, and `idempotency.scope=global` only - a non-global scope fails startup rather
+  than silently sharing keys across users.
+
+### Fixed
+
+- `IdempotencyAutoConfiguration` was gated entirely on a servlet web application, so everything in
+  it - store selection, the payload mapper, fingerprinting, metrics - was unavailable to any
+  non-servlet stack. Only the servlet aspect needed that condition.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added

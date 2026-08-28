@@ -4,6 +4,7 @@ include(
     "idempotency-core",
     "idempotency-store-redis",
     "idempotency-store-jdbc",
+    "idempotency-webflux",
     "idempotency-spring-boot-starter",
     "samples:sample-orders-api",
 )
