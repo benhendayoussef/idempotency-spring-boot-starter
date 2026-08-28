@@ -83,6 +83,10 @@
     {
       "name": "idempotency.caffeine.maximum-size",
       "description": "Maximum entries the Caffeine store holds. Records normally leave by TTL; this is the backstop for when new keys arrive faster than old ones expire, so memory stays bounded. Least-recently-used entries are evicted first."
+    },
+    {
+      "name": "idempotency.jdbc.dialect",
+      "description": "Which SQL dialect the JDBC store speaks. AUTO asks the DataSource what database it is connected to, on first use rather than at startup. Set explicitly to skip detection."
     }
   ],
   "hints": [
@@ -185,6 +189,23 @@
         {
           "value": "timeout",
           "description": "Release the key when a WAIT-policy duplicate times out waiting for the in-flight request."
+        }
+      ]
+    },
+    {
+      "name": "idempotency.jdbc.dialect",
+      "values": [
+        {
+          "value": "auto",
+          "description": "Detect from the DataSource on first use."
+        },
+        {
+          "value": "postgres",
+          "description": "PostgreSQL."
+        },
+        {
+          "value": "mysql",
+          "description": "MySQL or MariaDB."
         }
       ]
     }

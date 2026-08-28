@@ -23,7 +23,12 @@ import io.github.benhendayoussef.idempotency.internal.scope.TenantScopeResolver;
 import io.github.benhendayoussef.idempotency.store.caffeine.internal.CaffeineIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencyRecordSweeper;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySweeperScheduler;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySqlDialect;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.LazySqlDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.MySqlDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.PostgresDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.SqlDialectResolver;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcTransactionRunner;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import java.util.EnumMap;
@@ -212,10 +217,27 @@ public class IdempotencyAutoConfiguration {
     static class JdbcStoreConfiguration {
 
         @Bean
+        @ConditionalOnMissingBean(IdempotencySqlDialect.class)
+        @ConditionalOnBean(DataSource.class)
+        IdempotencySqlDialect idempotencySqlDialect(DataSource dataSource, IdempotencyProperties props) {
+            return switch (props.getJdbc().getDialect()) {
+                case POSTGRES -> new PostgresDialect();
+                case MYSQL -> new MySqlDialect();
+                // Detection opens one connection at startup. That is a deliberate trade: the
+                // alternative is discovering the wrong SQL was chosen from a duplicate execution
+                // in production, which is untraceable back to here.
+                case AUTO -> new LazySqlDialect(dataSource);
+            };
+        }
+
+        @Bean
         @ConditionalOnMissingBean(IdempotencyStore.class)
         @ConditionalOnBean(DataSource.class)
-        IdempotencyStore jdbcIdempotencyStore(DataSource dataSource, IdempotencyProperties props) {
-            return new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource), props.getJdbc().getTableName());
+        IdempotencyStore jdbcIdempotencyStore(DataSource dataSource, IdempotencyProperties props,
+                IdempotencySqlDialect dialect) {
+            log.debug("Idempotency JDBC store using the {} dialect", dialect.name());
+            return new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource),
+                    props.getJdbc().getTableName(), dialect);
         }
 
         @Bean

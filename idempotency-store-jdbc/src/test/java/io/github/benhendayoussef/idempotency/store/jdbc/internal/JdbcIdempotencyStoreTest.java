@@ -69,7 +69,8 @@ class JdbcIdempotencyStoreTest {
     }
 
     private JdbcIdempotencyStore store() {
-        return new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource), "idempotency_record");
+        return new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource), "idempotency_record",
+                new PostgresDialect());
     }
 
     /**
