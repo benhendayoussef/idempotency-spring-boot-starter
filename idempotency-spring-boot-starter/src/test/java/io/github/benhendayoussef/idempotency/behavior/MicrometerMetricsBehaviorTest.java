@@ -9,9 +9,9 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -25,7 +25,7 @@ import org.springframework.test.web.servlet.MockMvc;
                 MicrometerMetricsBehaviorTest.MeterRegistryConfiguration.class},
         properties = {"idempotency.store=memory",
                 TestAutoconfigExcludes.EXCLUDE_DATASOURCE_AND_SECURITY})
-@AutoConfigureMockMvc
+@Import(MockMvcTestConfiguration.class)
 class MicrometerMetricsBehaviorTest {
 
     @Autowired
