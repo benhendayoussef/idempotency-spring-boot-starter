@@ -7,6 +7,7 @@ import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
 import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
+import io.github.benhendayoussef.idempotency.store.caffeine.internal.CaffeineIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import java.io.IOException;
@@ -77,6 +78,30 @@ class IdempotencyAutoConfigurationTest {
                 .run(ctx -> {
                     assertThat(ctx).hasSingleBean(IdempotencyStore.class);
                     assertThat(ctx.getBean(IdempotencyStore.class)).isInstanceOf(JdbcIdempotencyStore.class);
+                });
+    }
+
+    @Test
+    void picksCaffeineWhenExplicitlyConfigured() {
+        runner.withPropertyValues("idempotency.store=caffeine")
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(IdempotencyStore.class);
+                    assertThat(ctx.getBean(IdempotencyStore.class))
+                            .isInstanceOf(CaffeineIdempotencyStore.class);
+                });
+    }
+
+    @Test
+    void caffeineWithoutTheModuleOnTheClasspathFailsWithTheActionableStoreMessage() {
+        // The module is optional. Asking for it without adding the dependency must produce the
+        // FailureAnalyzer message that names the problem, not a NoClassDefFoundError from a bean
+        // method that should never have been evaluated.
+        runner.withPropertyValues("idempotency.store=caffeine")
+                .withClassLoader(new FilteredClassLoader(CaffeineIdempotencyStore.class))
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("No IdempotencyStore is configured");
                 });
     }
 

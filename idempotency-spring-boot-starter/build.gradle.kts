@@ -8,6 +8,7 @@ dependencies {
     api(project(":idempotency-core"))
     compileOnly(project(":idempotency-store-redis"))
     compileOnly(project(":idempotency-store-jdbc"))
+    compileOnly(project(":idempotency-store-caffeine"))
     implementation("org.springframework.boot:spring-boot-autoconfigure")
     implementation("org.springframework.boot:spring-boot")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
@@ -17,6 +18,7 @@ dependencies {
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
+    testImplementation(project(":idempotency-store-caffeine"))
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
     // Spring Boot 4 split @AutoConfigureMockMvc out of spring-boot-test-autoconfigure into its

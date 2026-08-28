@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `idempotency-store-caffeine`: a single-instance store with real TTL eviction and a bounded size
+  (`idempotency.caffeine.maximum-size`). The built-in `store=memory` treats expired entries as
+  absent but never removes them, so it grows for the life of the process - fine for tests, a slow
+  leak for a service that stays up.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added
