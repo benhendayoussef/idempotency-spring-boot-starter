@@ -14,9 +14,12 @@ dependencies {
 
     compileOnly("org.springframework.data:spring-data-redis")
     compileOnly("org.springframework:spring-jdbc")
+    // Optional: metrics are wired only when the application already has a MeterRegistry.
+    compileOnly("io.micrometer:micrometer-core")
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
+    testImplementation("io.micrometer:micrometer-core")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
     // Spring Boot 4 split @AutoConfigureMockMvc out of spring-boot-test-autoconfigure into its

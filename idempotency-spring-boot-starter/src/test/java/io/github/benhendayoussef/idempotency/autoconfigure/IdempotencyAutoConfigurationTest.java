@@ -2,13 +2,17 @@ package io.github.benhendayoussef.idempotency.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.benhendayoussef.idempotency.api.IdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
+import io.github.benhendayoussef.idempotency.internal.NoOpIdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -202,6 +206,61 @@ class IdempotencyAutoConfigurationTest {
                 });
     }
 
+    // --- Micrometer metrics wiring -----------------------------------------------------------
+
+    @Test
+    void noMeterRegistry_keepsTheNoOpMetrics() {
+        // Micrometer is on this test classpath but no registry bean exists - the common shape for an
+        // application that has the jar transitively and never configured actuator. Injecting a
+        // MeterRegistry here would fail startup over something entirely optional.
+        runner.withUserConfiguration(RedisTemplateConfiguration.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(IdempotencyMetrics.class);
+                    assertThat(ctx.getBean(IdempotencyMetrics.class))
+                            .isInstanceOf(NoOpIdempotencyMetrics.class);
+                });
+    }
+
+    @Test
+    void aMeterRegistryBeanSwitchesMetricsToMicrometer() {
+        metricsRunner().withUserConfiguration(RedisTemplateConfiguration.class, MeterRegistryConfiguration.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean(IdempotencyMetrics.class))
+                            .as("the Micrometer implementation must win over the no-op fallback, which "
+                                    + "only works because IdempotencyMetricsAutoConfiguration is ordered before")
+                            .isNotInstanceOf(NoOpIdempotencyMetrics.class);
+                });
+    }
+
+    @Test
+    void metricsCanBeDisabledEvenWithARegistryPresent() {
+        metricsRunner().withUserConfiguration(RedisTemplateConfiguration.class, MeterRegistryConfiguration.class)
+                .withPropertyValues("idempotency.metrics.enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean(IdempotencyMetrics.class))
+                            .isInstanceOf(NoOpIdempotencyMetrics.class);
+                });
+    }
+
+    @Test
+    void aUserSuppliedMetricsBeanStillWins() {
+        metricsRunner().withUserConfiguration(RedisTemplateConfiguration.class, MeterRegistryConfiguration.class,
+                        CustomMetricsConfiguration.class)
+                .run(ctx -> assertThat(ctx.getBean(IdempotencyMetrics.class))
+                        .isSameAs(CustomMetricsConfiguration.CUSTOM));
+    }
+
+    /** The default runner does not load the metrics autoconfiguration; these cases need it. */
+    private WebApplicationContextRunner metricsRunner() {
+        return new WebApplicationContextRunner().withConfiguration(AutoConfigurations.of(
+                IdempotencyMetricsAutoConfiguration.class,
+                IdempotencyAutoConfiguration.class,
+                IdempotencyStoreFallbackAutoConfiguration.class));
+    }
+
     // --- idempotency.jdbc.join-transaction wiring (C4/C5/C6) ---------------------------------
 
     @Test
@@ -289,7 +348,8 @@ class IdempotencyAutoConfigurationTest {
         }
         assertThat(lines).containsExactlyInAnyOrder(
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyAutoConfiguration",
-                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration");
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyMetricsAutoConfiguration");
     }
 
     @Test
@@ -392,6 +452,25 @@ class IdempotencyAutoConfigurationTest {
             template.setConnectionFactory(factory);
             template.afterPropertiesSet();
             return template;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class MeterRegistryConfiguration {
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomMetricsConfiguration {
+        static final IdempotencyMetrics CUSTOM = new IdempotencyMetrics() {
+        };
+
+        @Bean
+        IdempotencyMetrics idempotencyMetrics() {
+            return CUSTOM;
         }
     }
 }

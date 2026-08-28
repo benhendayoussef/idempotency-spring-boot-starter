@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Micrometer metrics, wired automatically when the application has a `MeterRegistry`. Every outcome
+  lands on one counter, `idempotency.requests`, tagged by `outcome` - so a replay rate is a single
+  ratio rather than a hard-coded list of metric names. `idempotency.metrics.enabled=false` opts out;
+  a user-supplied `IdempotencyMetrics` bean still wins.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added

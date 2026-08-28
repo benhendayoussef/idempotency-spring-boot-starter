@@ -75,54 +75,109 @@
     {
       "name": "idempotency.jdbc.join-transaction",
       "description": "Run the handler and the completion write in one shared transaction so they commit or roll back together (exactly-once), instead of committing separately (at-least-once). Off by default: it pulls handlers with no @Transactional of their own into a transaction, and a handler's own @Transactional(timeout) stops applying once it joins."
+    },
+    {
+      "name": "idempotency.metrics.enabled",
+      "description": "Publish idempotency counters to Micrometer when a MeterRegistry is present. All outcomes land on one counter, idempotency.requests, tagged by outcome (executed, replayed, released, conflict, ...). Set false to keep the no-op implementation even in an application that has a registry."
     }
   ],
   "hints": [
     {
       "name": "idempotency.store",
       "values": [
-        { "value": "auto", "description": "Redis if present on the classpath, otherwise fail startup unless overridden." },
-        { "value": "redis", "description": "Fast, at-least-once. Requires spring-boot-starter-data-redis." },
-        { "value": "jdbc", "description": "Durable, at-least-once by default; exactly-once with idempotency.jdbc.join-transaction=true. Requires a DataSource." },
-        { "value": "memory", "description": "Single-instance, non-durable. Local development and tests only." }
+        {
+          "value": "auto",
+          "description": "Redis if present on the classpath, otherwise fail startup unless overridden."
+        },
+        {
+          "value": "redis",
+          "description": "Fast, at-least-once. Requires spring-boot-starter-data-redis."
+        },
+        {
+          "value": "jdbc",
+          "description": "Durable, at-least-once by default; exactly-once with idempotency.jdbc.join-transaction=true. Requires a DataSource."
+        },
+        {
+          "value": "memory",
+          "description": "Single-instance, non-durable. Local development and tests only."
+        }
       ]
     },
     {
       "name": "idempotency.on-conflict",
       "values": [
-        { "value": "wait", "description": "Poll until the in-flight request completes, then replay its response." },
-        { "value": "fail_fast", "description": "Return 409 with Retry-After immediately." }
+        {
+          "value": "wait",
+          "description": "Poll until the in-flight request completes, then replay its response."
+        },
+        {
+          "value": "fail_fast",
+          "description": "Return 409 with Retry-After immediately."
+        }
       ]
     },
     {
       "name": "idempotency.on-store-failure",
       "values": [
-        { "value": "proceed", "description": "Execute the handler unprotected; log a WARN and increment a metric." },
-        { "value": "fail", "description": "Return 503 without executing the handler." }
+        {
+          "value": "proceed",
+          "description": "Execute the handler unprotected; log a WARN and increment a metric."
+        },
+        {
+          "value": "fail",
+          "description": "Return 503 without executing the handler."
+        }
       ]
     },
     {
       "name": "idempotency.scope",
       "values": [
-        { "value": "global", "description": "One namespace for every caller." },
-        { "value": "user", "description": "Namespaced per authenticated principal (requires Spring Security)." },
-        { "value": "tenant", "description": "Namespaced per JWT tenant claim (idempotency.tenant-claim)." },
-        { "value": "custom", "description": "Register your own ScopeResolver bean for CUSTOM." }
+        {
+          "value": "global",
+          "description": "One namespace for every caller."
+        },
+        {
+          "value": "user",
+          "description": "Namespaced per authenticated principal (requires Spring Security)."
+        },
+        {
+          "value": "tenant",
+          "description": "Namespaced per JWT tenant claim (idempotency.tenant-claim)."
+        },
+        {
+          "value": "custom",
+          "description": "Register your own ScopeResolver bean for CUSTOM."
+        }
       ]
     },
     {
       "name": "idempotency.on-missing-principal",
       "values": [
-        { "value": "global", "description": "Fall back to the global namespace; idempotency still works, just not per-caller." },
-        { "value": "skip", "description": "Execute the handler unprotected; log a DEBUG line and increment a metric." },
-        { "value": "reject", "description": "Return 400 without executing the handler." }
+        {
+          "value": "global",
+          "description": "Fall back to the global namespace; idempotency still works, just not per-caller."
+        },
+        {
+          "value": "skip",
+          "description": "Execute the handler unprotected; log a DEBUG line and increment a metric."
+        },
+        {
+          "value": "reject",
+          "description": "Return 400 without executing the handler."
+        }
       ]
     },
     {
       "name": "idempotency.release-on",
       "values": [
-        { "value": "five_xx", "description": "Release the key when the handler throws a 5xx/infrastructure failure, so a retry re-executes." },
-        { "value": "timeout", "description": "Release the key when a WAIT-policy duplicate times out waiting for the in-flight request." }
+        {
+          "value": "five_xx",
+          "description": "Release the key when the handler throws a 5xx/infrastructure failure, so a retry re-executes."
+        },
+        {
+          "value": "timeout",
+          "description": "Release the key when a WAIT-policy duplicate times out waiting for the in-flight request."
+        }
       ]
     }
   ]
