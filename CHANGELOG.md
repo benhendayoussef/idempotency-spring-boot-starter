@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `idempotency.mode=filter`: byte-exact replay. Stores the real HTTP response - status, allowlisted
+  headers and body bytes - instead of the handler return value, so a body written straight to the
+  `HttpServletResponse` replays exactly. Endpoint selection stays annotation-driven and storage keys
+  are identical to aspect mode, so switching does not orphan existing records. Argument
+  fingerprinting is not available in this mode.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added

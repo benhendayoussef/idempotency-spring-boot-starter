@@ -112,6 +112,8 @@ a silent execution of the wrong payload.
 | Property | Default | Notes |
 |---|---|---|
 | `idempotency.enabled` | `true` | Master switch |
+| `idempotency.mode` | `aspect` | `aspect` | `filter`. See Replay modes below |
+| `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode |
 | `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `memory` |
 | `idempotency.default-ttl` | `24h` | Overridable per-endpoint via `@Idempotent(ttl = "...")` |
 | `idempotency.header-name` | `Idempotency-Key` | Overridable via `@Idempotent(keyHeader = "...")` |
@@ -304,6 +306,34 @@ polymorphic-deserialization gadget vector.
 - [`docs/design-decisions.md`](docs/design-decisions.md) — the architectural reasoning: why AOP
   over a servlet filter, the atomic claim, the failure policy, and what "exactly-once" does and
   doesn't mean here.
+
+## Replay modes
+
+`idempotency.mode` decides *what* gets stored and replayed. Both modes select endpoints the same
+way - `@Idempotent` on the handler - and produce identical storage keys, so switching does not
+orphan existing records.
+
+| | `aspect` (default) | `filter` |
+|---|---|---|
+| Captures | The handler return value, re-serialized on replay | The real HTTP response bytes |
+| Body written directly to `HttpServletResponse` | **Not captured** | Replayed exactly |
+| Response headers | Rebuilt from the return value | Replayed from an allowlist |
+| Argument fingerprinting | Yes - same key, different body gets a 422 | **No** - see below |
+| Runs | Inside the handler invocation | Outside the whole dispatch |
+
+Use `filter` when the exact bytes matter: a handler that streams or writes its own response, a
+content type negotiated at write time, or a header added by a filter further down the chain. Aspect
+mode cannot see any of those, because it returns before the response is written at all.
+
+Two things to know:
+
+- **No argument fingerprinting in filter mode.** That check hashes resolved method arguments, which
+  do not exist yet outside the dispatch. The equivalent would be hashing the request body, which
+  means buffering every request - a real cost on every endpoint to serve one. So in filter mode a
+  duplicate key with a *different* body replays the original response rather than getting a 422.
+- **Headers are an allowlist, not everything.** Replaying `Set-Cookie` would hand a second caller
+  the first caller's session. Add your own via `idempotency.filter.replay-headers` if clients
+  depend on them.
 
 ## Extending
 

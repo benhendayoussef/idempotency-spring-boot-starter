@@ -3,6 +3,8 @@ package io.github.benhendayoussef.idempotency.config;
 import io.github.benhendayoussef.idempotency.api.ConflictPolicy;
 import io.github.benhendayoussef.idempotency.api.IdempotencyScope;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.EnumSet;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,6 +20,13 @@ public class IdempotencyProperties {
 
     /** Master switch. */
     private boolean enabled = true;
+
+    /**
+     * How responses are captured and replayed. ASPECT stores the handler return value and
+     * re-serializes it; FILTER stores the real HTTP response bytes, so anything written straight to
+     * the response - or added by a later filter - replays exactly. Mutually exclusive.
+     */
+    private Mode mode = Mode.ASPECT;
 
     /** Which {@code IdempotencyStore} backs replay. {@code AUTO} picks Redis when it's on the classpath. */
     private StoreType store = StoreType.AUTO;
@@ -72,6 +81,7 @@ public class IdempotencyProperties {
 
     private final Redis redis = new Redis();
     private final Jdbc jdbc = new Jdbc();
+    private final Filter filter = new Filter();
 
     public boolean isEnabled() {
         return enabled;
@@ -79,6 +89,14 @@ public class IdempotencyProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public Mode getMode() {
+        return mode;
+    }
+
+    public void setMode(Mode mode) {
+        this.mode = mode;
     }
 
     public StoreType getStore() {
@@ -193,6 +211,10 @@ public class IdempotencyProperties {
         this.releaseOn = releaseOn;
     }
 
+    public Filter getFilter() {
+        return filter;
+    }
+
     public Redis getRedis() {
         return redis;
     }
@@ -208,6 +230,28 @@ public class IdempotencyProperties {
     public enum OnMissingPrincipal { GLOBAL, SKIP, REJECT }
 
     public enum ReleaseOn { FIVE_XX, TIMEOUT }
+
+    public enum Mode { ASPECT, FILTER }
+
+    public static class Filter {
+
+        /**
+         * Response headers replayed verbatim, by name. An allowlist rather than everything:
+         * replaying Set-Cookie would hand a second caller the first one's session, and replaying a
+         * stale Date or Content-Length would contradict the response actually being written. Add
+         * your own headers here if clients depend on them.
+         */
+        private List<String> replayHeaders = new ArrayList<>(List.of(
+                "Content-Type", "Location", "ETag", "Cache-Control"));
+
+        public List<String> getReplayHeaders() {
+            return replayHeaders;
+        }
+
+        public void setReplayHeaders(List<String> replayHeaders) {
+            this.replayHeaders = replayHeaders;
+        }
+    }
 
     public static class Redis {
 

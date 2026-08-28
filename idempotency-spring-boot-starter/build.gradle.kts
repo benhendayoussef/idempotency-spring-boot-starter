@@ -14,6 +14,9 @@ dependencies {
 
     compileOnly("org.springframework.data:spring-data-redis")
     compileOnly("org.springframework:spring-jdbc")
+    // For HandlerMapping, referenced when wiring the filter-mode bean. Servlet MVC is
+    // always present at runtime under @ConditionalOnWebApplication(SERVLET), so compileOnly.
+    compileOnly("org.springframework:spring-webmvc")
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
