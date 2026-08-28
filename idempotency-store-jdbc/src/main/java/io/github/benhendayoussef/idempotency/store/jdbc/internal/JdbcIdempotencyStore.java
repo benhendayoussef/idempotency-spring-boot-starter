@@ -35,48 +35,33 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcIdempotencyStore implements IdempotencyStore {
 
     private final NamedParameterJdbcTemplate jdbc;
-    private final String claimSql;
-    private final String completeSql;
-    private final String releaseSql;
-    private final String findSql;
+    // Memoized rather than built in the constructor: with dialect=auto the dialect has not
+    // been resolved yet at construction time, and asking it for SQL would force a database
+    // connection during startup - see LazySqlDialect for why that must not happen.
+    private volatile String completeSql;
+    private volatile String releaseSql;
+    private volatile String findSql;
     private final RowMapper<IdempotencyRecord> rowMapper = this::mapRow;
 
-    public JdbcIdempotencyStore(NamedParameterJdbcTemplate jdbc, String tableName) {
+    private final IdempotencySqlDialect dialect;
+
+    private final String tableName;
+
+    public JdbcIdempotencyStore(NamedParameterJdbcTemplate jdbc, String tableName,
+            IdempotencySqlDialect dialect) {
         this.jdbc = jdbc;
-        this.claimSql = """
-                INSERT INTO %s
-                    (id, state, fingerprint, status, payload_type, payload, created_at, expires_at)
-                VALUES (:id, 'IN_PROGRESS', :fp, NULL, NULL, NULL, clock_timestamp(),
-                        clock_timestamp() + (:ttlMillis * INTERVAL '1 millisecond'))
-                ON CONFLICT (id) DO UPDATE SET
-                    state = 'IN_PROGRESS', fingerprint = :fp, status = NULL,
-                    payload_type = NULL, payload = NULL, created_at = clock_timestamp(),
-                    expires_at = clock_timestamp() + (:ttlMillis * INTERVAL '1 millisecond')
-                WHERE %s.expires_at < clock_timestamp()
-                """.formatted(tableName, tableName);
-        this.completeSql = """
-                UPDATE %s SET
-                    state = 'COMPLETED', fingerprint = :fp, status = :status,
-                    payload_type = :payloadType, payload = :payload,
-                    expires_at = clock_timestamp() + (:ttlMillis * INTERVAL '1 millisecond')
-                WHERE id = :id
-                """.formatted(tableName);
-        this.releaseSql = "DELETE FROM %s WHERE id = :id".formatted(tableName);
-        this.findSql = """
-                SELECT state, fingerprint, status, payload_type, payload, created_at
-                FROM %s WHERE id = :id AND expires_at >= clock_timestamp()
-                """.formatted(tableName);
+        this.dialect = dialect;
+        this.tableName = tableName;
     }
 
     @Override
     public ClaimResult claim(String key, String fingerprint, Duration ttl) {
-        int rows = jdbc.update(claimSql, new MapSqlParameterSource()
-                .addValue("id", key)
-                .addValue("fp", fingerprint)
-                .addValue("ttlMillis", ttl.toMillis()));
-        if (rows == 1) {
+        if (dialect.tryAcquire(jdbc, tableName, key, fingerprint, ttl.toMillis())) {
             return new ClaimResult.Acquired();
         }
+        // Lost the claim, so read back whoever holds it. The Optional can still be empty if that
+        // row expired or was released in the gap - in which case nobody holds the key any more and
+        // the caller is free to proceed.
         return find(key)
                 .<ClaimResult>map(ClaimResult.AlreadyHeld::new)
                 .orElseGet(ClaimResult.Acquired::new);
@@ -85,7 +70,7 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     @Override
     @Transactional(propagation = Propagation.REQUIRED)
     public void complete(String key, IdempotencyRecord record, Duration ttl) {
-        jdbc.update(completeSql, new MapSqlParameterSource()
+        jdbc.update(completeSql(), new MapSqlParameterSource()
                 .addValue("id", key)
                 .addValue("fp", record.fingerprint())
                 .addValue("status", record.status())
@@ -97,13 +82,28 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void release(String key) {
-        jdbc.update(releaseSql, Map.of("id", key));
+        jdbc.update(releaseSql(), Map.of("id", key));
     }
 
     @Override
     public Optional<IdempotencyRecord> find(String key) {
-        var rows = jdbc.query(findSql, new MapSqlParameterSource().addValue("id", key), rowMapper);
+        var rows = jdbc.query(findSql(), new MapSqlParameterSource().addValue("id", key), rowMapper);
         return rows.stream().findFirst();
+    }
+
+    private String completeSql() {
+        String sql = completeSql;
+        return sql != null ? sql : (completeSql = dialect.completeSql(tableName));
+    }
+
+    private String releaseSql() {
+        String sql = releaseSql;
+        return sql != null ? sql : (releaseSql = dialect.releaseSql(tableName));
+    }
+
+    private String findSql() {
+        String sql = findSql;
+        return sql != null ? sql : (findSql = dialect.findSql(tableName));
     }
 
     private IdempotencyRecord mapRow(ResultSet rs, int rowNum) throws SQLException {

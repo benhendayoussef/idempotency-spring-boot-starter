@@ -70,7 +70,7 @@ spring:
   sql:
     init:
       mode: always
-      schema-locations: classpath:db/idempotency/postgres.sql # ships inside idempotency-store-jdbc
+      schema-locations: classpath:db/idempotency/postgres.sql # or mysql.sql - both ship inside idempotency-store-jdbc
 idempotency:
   store: jdbc   # required: AUTO never selects JDBC on its own, even with no Redis present
 ```
@@ -127,17 +127,18 @@ a silent execution of the wrong payload.
 | `idempotency.release-on` | `five_xx,timeout` | Outcomes that release instead of complete the key. Note the underscore: Spring's relaxed binding needs `five_xx`, not `5xx` |
 | `idempotency.redis.key-prefix` | `idempotency:` | |
 | `idempotency.jdbc.table-name` | `idempotency_record` | |
+| `idempotency.jdbc.dialect` | `auto` | `auto` | `postgres` | `mysql`. AUTO detects from the `DataSource` on first use, not at startup |
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
 
 ## Store comparison
 
-| | Redis | JDBC (Postgres) |
+| | Redis | JDBC (Postgres / MySQL) |
 |---|---|---|
 | Guarantee | **At-least-once.** If the process crashes between the business transaction committing and the completion record being written, the key stays `IN_PROGRESS` until TTL and a retry re-executes. | **At-least-once by default; exactly-once with `idempotency.jdbc.join-transaction=true`.** Both modes are described below — read them before switching. |
 | Speed | Fast — a single round trip per claim. | Slower — shares the datasource and transaction. |
-| Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and `db/idempotency/postgres.sql` applied — see the JDBC quickstart above |
+| Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and the schema for your database applied — see the JDBC quickstart above |
 | Good for | The other 95% of use cases. | Payments and anything else where a replayed side effect is unacceptable, **if you use it the way described below.** |
 
 **Measured overhead** (200 requests, 20 warmup iterations, real Redis/Postgres via Testcontainers on
@@ -253,7 +254,7 @@ Being loud about these is what makes a library trustworthy:
   anything the handler writes directly to `HttpServletResponse` is not captured.
 - Does not work on streaming / SSE / `StreamingResponseBody` returns.
 - Does not handle multipart bodies in the fingerprint.
-- Postgres only for the JDBC store (MySQL is on the roadmap).
+- The JDBC store supports PostgreSQL and MySQL/MariaDB. Other engines need a new dialect.
 - Servlet stack only (WebFlux is on the roadmap).
 - AOP-based: self-invocation bypasses the proxy, same as `@Transactional`. A startup check warns
   if `@Idempotent` is found on a non-public method.

@@ -33,6 +33,8 @@ dependencies {
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:mysql")
+    testRuntimeOnly("com.mysql:mysql-connector-j")
     testImplementation("org.postgresql:postgresql")
 }
 

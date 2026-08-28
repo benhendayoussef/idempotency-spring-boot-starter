@@ -209,6 +209,8 @@ public class IdempotencyProperties {
 
     public enum ReleaseOn { FIVE_XX, TIMEOUT }
 
+    public enum Dialect { AUTO, POSTGRES, MYSQL }
+
     public static class Redis {
 
         /** Prefix applied to every Redis key the store writes. */
@@ -246,6 +248,14 @@ public class IdempotencyProperties {
          */
         private boolean joinTransaction = false;
 
+        /**
+         * Which SQL dialect the store speaks. AUTO asks the DataSource what it is connected to at
+         * startup, which is right almost always; set it explicitly for a database that reports a
+         * product name AUTO does not recognise, or to fail fast on a misconfigured DataSource
+         * rather than silently getting the wrong SQL.
+         */
+        private Dialect dialect = Dialect.AUTO;
+
         public String getTableName() {
             return tableName;
         }
@@ -268,6 +278,14 @@ public class IdempotencyProperties {
 
         public void setSweeperInterval(Duration sweeperInterval) {
             this.sweeperInterval = sweeperInterval;
+        }
+
+        public Dialect getDialect() {
+            return dialect;
+        }
+
+        public void setDialect(Dialect dialect) {
+            this.dialect = dialect;
         }
 
         public boolean isJoinTransaction() {
