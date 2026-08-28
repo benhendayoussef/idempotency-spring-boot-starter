@@ -22,7 +22,6 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -178,7 +177,7 @@ class IdempotencyAutoConfigurationTest {
         // StringRedisTemplate as long as a RedisConnectionFactory exists - verified here against
         // the real autoconfiguration, not a hand-rolled stand-in.
         new WebApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(DataRedisAutoConfiguration.class,
+                .withConfiguration(AutoConfigurations.of(springRedisAutoConfiguration(),
                         IdempotencyAutoConfiguration.class, IdempotencyStoreFallbackAutoConfiguration.class))
                 .withUserConfiguration(RedisConnectionFactoryOnlyConfiguration.class, CustomNonStringRedisTemplateConfiguration.class)
                 .run(ctx -> {
@@ -393,5 +392,25 @@ class IdempotencyAutoConfigurationTest {
             template.afterPropertiesSet();
             return template;
         }
+    }
+
+    /**
+     * Boot 4 renamed and repackaged Redis autoconfiguration ({@code DataRedisAutoConfiguration}) from
+     * the Boot 3 {@code RedisAutoConfiguration}. This test needs the real one - the whole point is to
+     * verify against Spring Boot&#39;s own autoconfiguration rather than a hand-rolled stand-in - so it is
+     * resolved by name and whichever generation is on the classpath wins.
+     */
+    private static Class<?> springRedisAutoConfiguration() {
+        for (String fqn : List.of(
+                "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration",
+                "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")) {
+            try {
+                return Class.forName(fqn);
+            } catch (ClassNotFoundException ignored) {
+                // Wrong generation - try the next.
+            }
+        }
+        throw new IllegalStateException(
+                "Neither the Boot 3 nor the Boot 4 Redis autoconfiguration is on the test classpath");
     }
 }

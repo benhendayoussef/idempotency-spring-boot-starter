@@ -26,10 +26,19 @@ subprojects {
 
     repositories { mavenCentral() }
 
+    // The Boot generation under test is a build parameter so CI can run the whole suite against
+    // both Spring Boot 3.x and 4.x from one source tree. The version catalog supplies the default;
+    // -PspringBootVersion=3.5.6 overrides it. Published artifacts are compiled against the lower
+    // bound (see the compatibility matrix in the README), which is what makes one artifact work on
+    // both - every Spring API this library touches exists in both generations.
+    val springBootVersion = providers.gradleProperty("springBootVersion")
+        .getOrElse(rootProject.libs.versions.springBoot.get())
+    val springBootBom = "org.springframework.boot:spring-boot-dependencies:$springBootVersion"
+
     dependencies {
-        add("implementation", platform(rootProject.libs.spring.boot.dependencies))
-        add("annotationProcessor", platform(rootProject.libs.spring.boot.dependencies))
-        add("testImplementation", platform(rootProject.libs.spring.boot.dependencies))
+        add("implementation", platform(springBootBom))
+        add("annotationProcessor", platform(springBootBom))
+        add("testImplementation", platform(springBootBom))
         add("testImplementation", platform(rootProject.libs.testcontainers.bom))
         add("testImplementation", rootProject.libs.assertj.core)
         add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")

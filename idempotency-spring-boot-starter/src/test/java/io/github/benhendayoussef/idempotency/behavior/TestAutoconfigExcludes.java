@@ -11,14 +11,23 @@ package io.github.benhendayoussef.idempotency.behavior;
  */
 final class TestAutoconfigExcludes {
 
+    // Both generations are named. Boot ignores an exclude entry whose class is not on the
+    // classpath, so the pair is safe on either - and naming only one would silently stop
+    // excluding anything on the other, letting Boot supply the very DataSource these tests
+    // exist to run without.
     private static final String NO_DATASOURCE =
-            "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration";
+            "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration";
     // Excludes only the autoconfiguration that installs Boot's default restrictive filter chain -
     // not the base SecurityAutoConfiguration, which also registers the SecurityProperties bean
     // other core Boot autoconfigurations (error handling) depend on regardless of whether a
     // security filter chain is wanted.
     private static final String NO_SECURITY =
-            "org.springframework.boot.security.autoconfigure.web.servlet.ServletWebSecurityAutoConfiguration";
+            "org.springframework.boot.security.autoconfigure.web.servlet.ServletWebSecurityAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration";
+
+    /** For tests that configure no DataSource of their own but do want default security. */
+    static final String EXCLUDE_DATASOURCE = "spring.autoconfigure.exclude=" + NO_DATASOURCE;
 
     /** For JDBC-store tests: they need a real DataSource, just not Boot's default security. */
     static final String EXCLUDE_SECURITY = "spring.autoconfigure.exclude=" + NO_SECURITY;
