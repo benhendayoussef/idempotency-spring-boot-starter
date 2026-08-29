@@ -87,6 +87,14 @@
     {
       "name": "idempotency.jdbc.dialect",
       "description": "Which SQL dialect the JDBC store speaks. AUTO asks the DataSource what database it is connected to, on first use rather than at startup. Set explicitly to skip detection."
+    },
+    {
+      "name": "idempotency.mode",
+      "description": "How responses are captured and replayed. ASPECT stores the handler return value and re-serializes it on replay; FILTER stores the real HTTP response bytes, so a body written straight to the response and allowlisted headers replay exactly. Mutually exclusive - exactly one is registered."
+    },
+    {
+      "name": "idempotency.filter.replay-headers",
+      "description": "Response headers replayed verbatim in filter mode, by name. An allowlist: replaying Set-Cookie would hand a second caller the first caller session."
     }
   ],
   "hints": [
@@ -206,6 +214,19 @@
         {
           "value": "mysql",
           "description": "MySQL or MariaDB."
+        }
+      ]
+    },
+    {
+      "name": "idempotency.mode",
+      "values": [
+        {
+          "value": "aspect",
+          "description": "Default. Captures the handler return value; cannot see anything written directly to the response."
+        },
+        {
+          "value": "filter",
+          "description": "Byte-exact replay of the real HTTP response. No argument fingerprinting."
         }
       ]
     }

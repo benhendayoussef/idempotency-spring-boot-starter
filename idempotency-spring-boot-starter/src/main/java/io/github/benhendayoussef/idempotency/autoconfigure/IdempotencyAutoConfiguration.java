@@ -15,6 +15,7 @@ import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyExceptionHandler;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyKeyComposer;
 import io.github.benhendayoussef.idempotency.internal.InMemoryIdempotencyStore;
+import io.github.benhendayoussef.idempotency.internal.filter.IdempotencyFilter;
 import io.github.benhendayoussef.idempotency.internal.NoOpIdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.internal.scope.GlobalScopeResolver;
@@ -52,6 +53,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
@@ -168,9 +170,12 @@ public class IdempotencyAutoConfiguration {
         return map;
     }
 
+    // ASPECT is the default, and matchIfMissing keeps an application that never set idempotency.mode
+    // on exactly the behaviour it had before the property existed.
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnWebApplication(type = Type.SERVLET)
+    @ConditionalOnProperty(prefix = "idempotency", name = "mode", havingValue = "aspect", matchIfMissing = true)
     public IdempotencyAspect idempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes,
@@ -189,6 +194,22 @@ public class IdempotencyAutoConfiguration {
         }
         return new IdempotencyAspect(store, props, fingerprinter, composer, scopes,
                 idempotencyPayloadObjectMapper, metrics, runner);
+    }
+
+    /**
+     * Filter mode. Mutually exclusive with the aspect above by property value, so exactly one of the
+     * two is ever registered - running both would have each claim the same key for the same request.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "idempotency", name = "mode", havingValue = "filter")
+    public IdempotencyFilter idempotencyFilter(IdempotencyStore store, IdempotencyProperties props,
+            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            ObjectProvider<HandlerMapping> handlerMappings) {
+        // ObjectProvider, not a direct List injection: the filter is created while the mapping beans
+        // are still being built, and demanding them eagerly here deadlocks context startup.
+        return new IdempotencyFilter(store, props, idempotencyPayloadObjectMapper, metrics,
+                handlerMappings.orderedStream().toList());
     }
 
     @Bean

@@ -18,6 +18,9 @@ dependencies {
     compileOnly("org.springframework:spring-jdbc")
     // Optional: metrics are wired only when the application already has a MeterRegistry.
     compileOnly("io.micrometer:micrometer-core")
+    // For HandlerMapping, referenced when wiring the filter-mode bean. Servlet MVC is
+    // always present at runtime under @ConditionalOnWebApplication(SERVLET), so compileOnly.
+    compileOnly("org.springframework:spring-webmvc")
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
