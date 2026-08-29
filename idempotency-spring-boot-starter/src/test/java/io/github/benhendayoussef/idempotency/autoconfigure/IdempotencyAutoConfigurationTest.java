@@ -244,22 +244,6 @@ class IdempotencyAutoConfigurationTest {
                     assertThat(ctx).hasSingleBean(IdempotencyMetrics.class);
                     assertThat(ctx.getBean(IdempotencyMetrics.class))
                             .isInstanceOf(NoOpIdempotencyMetrics.class);
-    // --- SQL dialect selection ---------------------------------------------------------------
-
-    @Test
-    void dialectAutoDetectionDoesNotTouchTheDatabaseAtStartup() {
-        // DataSourceConfiguration points at a Postgres that is not running. Startup must still
-        // succeed: an unreachable database is a request-time condition that
-        // idempotency.on-store-failure decides what to do about, and detecting the dialect eagerly
-        // would promote it to a startup failure and take the application down instead.
-        runner.withUserConfiguration(DataSourceConfiguration.class)
-                .withPropertyValues("idempotency.store=jdbc")
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).hasSingleBean(IdempotencySqlDialect.class);
-                    assertThat(ctx.getBean(IdempotencySqlDialect.class).name())
-                            .as("resolving the name must not be what forces a connection either")
-                            .isEqualTo("auto (not yet resolved)");
                 });
     }
 
@@ -301,6 +285,27 @@ class IdempotencyAutoConfigurationTest {
                 IdempotencyAutoConfiguration.class,
                 IdempotencyStoreFallbackAutoConfiguration.class));
     }
+
+    // --- SQL dialect selection ---------------------------------------------------------------
+
+    @Test
+    void dialectAutoDetectionDoesNotTouchTheDatabaseAtStartup() {
+        // DataSourceConfiguration points at a Postgres that is not running. Startup must still
+        // succeed: an unreachable database is a request-time condition that
+        // idempotency.on-store-failure decides what to do about, and detecting the dialect eagerly
+        // would promote it to a startup failure and take the application down instead.
+        runner.withUserConfiguration(DataSourceConfiguration.class)
+                .withPropertyValues("idempotency.store=jdbc")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(IdempotencySqlDialect.class);
+                    assertThat(ctx.getBean(IdempotencySqlDialect.class).name())
+                            .as("resolving the name must not be what forces a connection either")
+                            .isEqualTo("auto (not yet resolved)");
+                });
+    }
+
+    @Test
     void anExplicitDialectSkipsDetectionEntirely() {
         runner.withUserConfiguration(DataSourceConfiguration.class)
                 .withPropertyValues("idempotency.store=jdbc", "idempotency.jdbc.dialect=mysql")
@@ -309,6 +314,7 @@ class IdempotencyAutoConfigurationTest {
                     assertThat(ctx.getBean(IdempotencySqlDialect.class).name()).isEqualTo("MySQL");
                 });
     }
+
     // --- idempotency.jdbc.join-transaction wiring (C4/C5/C6) ---------------------------------
 
     @Test

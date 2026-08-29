@@ -79,12 +79,11 @@ class MySqlIdempotencyBehaviorTest extends AbstractIdempotencyBehaviorTest {
 
     /**
      * The reclaim path, which is where the two dialects diverge most. Postgres expresses it as
-     * {@code ON CONFLICT ... WHERE expired}; MySQL has to push the condition into every assignment,
-     * and the update reports 2 affected rows rather than 1.
+     * {@code ON CONFLICT ... WHERE expired}; MySQL cannot, because its driver reports matched rather
+     * than changed rows, so it reclaims with a conditional UPDATE and falls back to an INSERT.
      *
-     * <p>A dialect that got the affected-row reading wrong would fail here specifically: the caller
-     * would be told the key is already held by a row it just wrote itself, and get a 409 instead of
-     * executing.
+     * <p>This is the test that fails if that fallback is wrong: the caller would be told the key is
+     * already held by a row it just wrote itself, and get a 409 instead of executing.
      */
     @Test
     void anExpiredRowIsReclaimedByTheNextClaimRatherThanConflicting() throws Exception {
