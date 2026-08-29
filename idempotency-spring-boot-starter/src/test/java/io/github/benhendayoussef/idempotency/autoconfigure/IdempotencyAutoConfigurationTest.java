@@ -403,7 +403,8 @@ class IdempotencyAutoConfigurationTest {
         assertThat(lines).containsExactlyInAnyOrder(
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyAutoConfiguration",
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration",
-                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyMetricsAutoConfiguration");
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyMetricsAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyWebFluxAutoConfiguration");
     }
 
     @Test

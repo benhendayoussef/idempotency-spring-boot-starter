@@ -6,7 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 /** SHA-256 hex digest, used for both storage-key composition and argument fingerprinting. */
-final class Hashing {
+public final class Hashing {
 
     private Hashing() {
     }

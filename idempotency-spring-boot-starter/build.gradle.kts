@@ -9,6 +9,7 @@ dependencies {
     compileOnly(project(":idempotency-store-redis"))
     compileOnly(project(":idempotency-store-jdbc"))
     compileOnly(project(":idempotency-store-caffeine"))
+    compileOnly(project(":idempotency-webflux"))
     implementation("org.springframework.boot:spring-boot-autoconfigure")
     implementation("org.springframework.boot:spring-boot")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
@@ -22,6 +23,8 @@ dependencies {
     testImplementation(project(":idempotency-store-jdbc"))
     testImplementation("io.micrometer:micrometer-core")
     testImplementation(project(":idempotency-store-caffeine"))
+    testImplementation(project(":idempotency-webflux"))
+    testImplementation("org.springframework.boot:spring-boot-starter-webflux")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
     // No spring-boot-webmvc-test here on purpose: that module is Boot 4 only, and depending on it

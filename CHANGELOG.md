@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+<<<<<<< HEAD
 - Micrometer metrics, wired automatically when the application has a `MeterRegistry`. Every outcome
   lands on one counter, `idempotency.requests`, tagged by `outcome` - so a replay rate is a single
   ratio rather than a hard-coded list of metric names. `idempotency.metrics.enabled=false` opts out;
@@ -14,6 +15,18 @@ All notable changes to this project are documented in this file.
   (`idempotency.caffeine.maximum-size`). The built-in `store=memory` treats expired entries as
   absent but never removes them, so it grows for the life of the process - fine for tests, a slow
   leak for a service that stays up.
+=======
+- `idempotency-webflux`: `@Idempotent` on reactive handlers returning `Mono`. The WAIT policy holds
+  no thread on this stack. Limitations, all documented: `Mono` only, blocking stores scheduled onto
+  `boundedElastic`, and `idempotency.scope=global` only - a non-global scope fails startup rather
+  than silently sharing keys across users.
+
+### Fixed
+
+- `IdempotencyAutoConfiguration` was gated entirely on a servlet web application, so everything in
+  it - store selection, the payload mapper, fingerprinting, metrics - was unavailable to any
+  non-servlet stack. Only the servlet aspect needed that condition.
+>>>>>>> feature/webflux-support
 
 ## [0.2.0] - 2026-08-23
 

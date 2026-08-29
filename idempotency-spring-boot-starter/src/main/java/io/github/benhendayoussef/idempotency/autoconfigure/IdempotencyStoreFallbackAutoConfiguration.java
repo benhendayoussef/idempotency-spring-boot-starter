@@ -6,7 +6,6 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication.Type;
 import org.springframework.context.annotation.Bean;
 
 /**
@@ -16,7 +15,9 @@ import org.springframework.context.annotation.Bean;
  */
 @AutoConfiguration(after = IdempotencyAutoConfiguration.class)
 @ConditionalOnProperty(prefix = "idempotency", name = "enabled", matchIfMissing = true)
-@ConditionalOnWebApplication(type = Type.SERVLET)
+// Any web application: a WebFlux app with no usable store needs the same actionable startup
+// failure a servlet one gets, rather than a NoSuchBeanDefinitionException from the aspect.
+@ConditionalOnWebApplication
 public class IdempotencyStoreFallbackAutoConfiguration {
 
     @Bean

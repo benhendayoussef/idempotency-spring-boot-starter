@@ -88,7 +88,11 @@ import org.springframework.transaction.PlatformTransactionManager;
         "org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration"
 })
 @ConditionalOnProperty(prefix = "idempotency", name = "enabled", matchIfMissing = true)
-@ConditionalOnWebApplication(type = Type.SERVLET)
+// Any web application, not just servlet. Everything in this class except the aspect itself - store
+// selection, the payload mapper, fingerprinting, metrics, scope resolvers - is stack-agnostic, and
+// gating the whole class on SERVLET left a WebFlux application with no store at all. Only the
+// servlet aspect is servlet-specific, so only it carries the narrower condition.
+@ConditionalOnWebApplication
 @EnableConfigurationProperties(IdempotencyProperties.class)
 public class IdempotencyAutoConfiguration {
 
@@ -166,6 +170,7 @@ public class IdempotencyAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnWebApplication(type = Type.SERVLET)
     public IdempotencyAspect idempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes,
