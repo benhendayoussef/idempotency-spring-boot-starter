@@ -48,7 +48,7 @@ with an `Idempotent-Replay: true` header, and the handler does not execute a sec
 See [`samples/sample-orders-api`](samples/sample-orders-api) for a runnable demo
 (`docker compose up -d && ./gradlew :samples:sample-orders-api:bootRun`, then `./demo.sh`).
 
-## Quickstart (JDBC / Postgres)
+## Quickstart (JDBC — Postgres or MySQL)
 
 The JDBC store needs more setup than swapping one dependency — all of the following:
 
@@ -75,7 +75,32 @@ idempotency:
   store: jdbc   # required: AUTO never selects JDBC on its own, even with no Redis present
 ```
 
+For **MySQL or MariaDB**, change three things: the JDBC URL, the driver
+(`runtimeOnly("com.mysql:mysql-connector-j")`), and the schema
+(`classpath:db/idempotency/mysql.sql`). Nothing else — the dialect is detected from the `DataSource`
+on first use, so `idempotency.jdbc.dialect` only needs setting to skip detection.
+
 The same `@Idempotent` annotation and `curl` round trip from the Redis quickstart apply unchanged.
+
+## Quickstart (Caffeine — single instance)
+
+For one instance that stays up, with no Redis and no database, where losing state on restart is
+acceptable:
+
+```kotlin
+dependencies {
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-store-caffeine:0.3.0")
+}
+```
+
+```yaml
+idempotency:
+  store: caffeine
+```
+
+Prefer this over `store=memory` for anything long-lived: the built-in memory store never evicts
+expired entries, so it grows for the life of the process.
 
 ## What happens
 
@@ -114,7 +139,7 @@ a silent execution of the wrong payload.
 | `idempotency.enabled` | `true` | Master switch |
 | `idempotency.mode` | `aspect` | `aspect` | `filter`. See Replay modes below |
 | `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode |
-| `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `memory` |
+| `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `caffeine` \| `memory` |
 | `idempotency.default-ttl` | `24h` | Overridable per-endpoint via `@Idempotent(ttl = "...")` |
 | `idempotency.header-name` | `Idempotency-Key` | Overridable via `@Idempotent(keyHeader = "...")` |
 | `idempotency.require-key` | `false` | `true` rejects keyless requests with 400 instead of passing them through |

@@ -28,8 +28,8 @@ Three viable approaches to intercepting a request for replay:
 and streaming/SSE returns are not supported. In `@RestController` code that returns a value, this
 is rarely a constraint — but it is a real one, and it is listed in the README's limitations.
 
-A `mode: filter` option for byte-exact replay is on the roadmap for 0.2. The store SPI is
-deliberately designed so that implementation can slot in behind the same interface.
+A `mode: filter` option for byte-exact replay shipped in 0.3 - see the 0.3 decisions at the end of
+this document. It slots in behind the same store SPI, which was designed for it.
 
 **Self-invocation is bypassed**, the same well-known limitation as `@Transactional`: an internal
 `this.method()` call never goes through the proxy. A startup check logs a warning when
@@ -189,3 +189,80 @@ vector: anyone who can write to the store could name any class on the classpath.
 used only as an equality check — if it no longer matches the current method's return type, the
 record is treated as stale and the request re-executes, which also handles a method signature
 legitimately changing between deploys.
+
+## 0.3 decisions
+
+Four choices from 0.3 that were not obvious, and one that a reader will otherwise assume was an
+oversight.
+
+### One artifact for two Spring Boot generations
+
+Nothing in the library was Boot-4-specific — every Spring API it touches exists identically in Boot
+3, which was luck as much as design. What actually pinned it were two autoconfiguration package
+names and one test dependency.
+
+So the artifacts are compiled against the lower bound and the suite runs against both generations in
+CI, rather than shipping a `-boot3` classifier or a parallel version line. That doubles CI time and
+costs the freedom to adopt a Boot-4-only API later; it buys one coordinate that works everywhere.
+The moment something genuinely needs Boot 4, this decision has to be revisited rather than worked
+around.
+
+The failure mode being defended against is quiet: `@AutoConfiguration(afterName = ...)` naming a
+class that does not exist matches nothing and orders nothing, so a store bean can be evaluated
+before the `DataSource` it needs. Nothing throws. Both generations' names are listed, and a test
+pins all four.
+
+### The dialect owns the claim, not just its SQL
+
+`IdempotencySqlDialect` exposes `tryAcquire(...)` rather than a `claimSql` string, because the two
+engines need different *algorithms*.
+
+Postgres expresses claim-or-reclaim as one statement whose affected-row count is trustworthy. MySQL
+cannot: Connector/J defaults to `useAffectedRows=false`, so the driver reports *matched* rather than
+*changed* rows and an unchanged duplicate is indistinguishable from a fresh insert. Reading the
+count would have meant every MySQL duplicate executing — the exact opposite of the library's job,
+decided by a connection-string option the application owns.
+
+MySQL therefore claims in two conditional statements: an `UPDATE` that a live row cannot match, then
+an `INSERT` whose collision surfaces as an exception rather than a count. Neither depends on driver
+configuration.
+
+### Dialect detection is deferred
+
+Detecting the database at bean creation opens a connection during startup, which turns an
+unreachable database into a startup failure and defeats `idempotency.on-store-failure=proceed`
+entirely. Resolution happens on first use instead, so an unreachable store stays a request-time
+condition the failure policy can act on.
+
+### WebFlux is a second aspect, and deliberately limited
+
+Almost nothing carries over from the servlet aspect: the request lives in the Reactor context rather
+than a ThreadLocal, store calls have to leave the event loop, and the outcome is only known when the
+returned `Mono` completes.
+
+Three limits are enforced rather than papered over. Only `Mono` is advised — a `Flux` is a stream and
+this library replays one captured response. Stores remain blocking and are scheduled onto
+`boundedElastic`, which is correct but costs two thread handoffs per request; a reactive store SPI
+is 0.4. And `idempotency.scope` must be `global`, because `USER`/`TENANT` resolve the principal from
+`SecurityContextHolder`, which is meaningless on a reactive stack — falling back to global silently
+would share idempotency keys across users, so it fails startup instead.
+
+One thing is better here: the `WAIT` policy holds no thread, because the delay is a timer rather
+than a sleep. The thread-pool exhaustion the servlet stack documents does not apply.
+
+### Filter mode keeps annotation-driven selection
+
+`mode=filter` exists because the aspect runs *inside* the handler invocation and the response body
+does not exist yet when it returns — so it can never capture a body written straight to the
+`HttpServletResponse`.
+
+The easy implementation would treat "every POST with a key header" as idempotent. It does not: two
+modes of the same library disagreeing about *which* endpoints are idempotent would be a worse
+surprise than any difference in how they store the response. The filter resolves the handler against
+the application's `HandlerMapping`s to find `@Idempotent`, at the cost of one extra mapping lookup,
+and produces byte-identical storage keys so switching modes does not orphan existing records.
+
+What it gives up is argument fingerprinting: that hashes resolved method arguments, which do not
+exist outside the dispatch, and the request-body equivalent would mean buffering every request. In
+filter mode a duplicate key with a different body replays rather than returning 422. That is a real
+difference between the modes, documented rather than approximated.
