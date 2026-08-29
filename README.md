@@ -27,8 +27,8 @@ replayed** — not a re-execution, not an error.
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.2.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-redis:0.2.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
 }
 ```
 
@@ -54,8 +54,8 @@ The JDBC store needs more setup than swapping one dependency — all of the foll
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.2.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.2.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.3.0")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     runtimeOnly("org.postgresql:postgresql")
 }
@@ -441,10 +441,11 @@ lower bound and the full suite runs against both in CI on every push.
 
 ## Roadmap
 
-- **0.2** — ✅ Genuine exactly-once for the JDBC store via `idempotency.jdbc.join-transaction`;
-  still to come: MySQL store, `mode: filter` for byte-exact replay, Micrometer metrics
-- **0.3** — WebFlux support, Caffeine store for single-instance apps
-- **0.4** — GraalVM native image hints
+- **0.2** — ✅ Genuine exactly-once for the JDBC store via `idempotency.jdbc.join-transaction`
+- **0.3** — ✅ Spring Boot 3 support, Micrometer metrics, MySQL/MariaDB store, Caffeine store,
+  WebFlux (`Mono` handlers), and `mode: filter` for byte-exact replay
+- **0.4** — A reactive store SPI (R2DBC, reactive Redis), so WebFlux no longer schedules blocking
+  store calls onto `boundedElastic`; GraalVM native image hints
 - **0.5** — Kotlin coroutine support, `@Idempotent` on `@KafkaListener`
 
 ## Contributing

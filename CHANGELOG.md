@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
 ### Added
 
 - Micrometer metrics, wired automatically when the application has a `MeterRegistry`. Every outcome
