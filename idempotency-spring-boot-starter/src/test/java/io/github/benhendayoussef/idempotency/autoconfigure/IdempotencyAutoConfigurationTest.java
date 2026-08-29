@@ -2,13 +2,19 @@ package io.github.benhendayoussef.idempotency.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.benhendayoussef.idempotency.api.IdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
+import io.github.benhendayoussef.idempotency.internal.NoOpIdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
+import io.github.benhendayoussef.idempotency.store.caffeine.internal.CaffeineIdempotencyStore;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySqlDialect;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -22,7 +28,6 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -77,6 +82,30 @@ class IdempotencyAutoConfigurationTest {
                 .run(ctx -> {
                     assertThat(ctx).hasSingleBean(IdempotencyStore.class);
                     assertThat(ctx.getBean(IdempotencyStore.class)).isInstanceOf(JdbcIdempotencyStore.class);
+                });
+    }
+
+    @Test
+    void picksCaffeineWhenExplicitlyConfigured() {
+        runner.withPropertyValues("idempotency.store=caffeine")
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(IdempotencyStore.class);
+                    assertThat(ctx.getBean(IdempotencyStore.class))
+                            .isInstanceOf(CaffeineIdempotencyStore.class);
+                });
+    }
+
+    @Test
+    void caffeineWithoutTheModuleOnTheClasspathFailsWithTheActionableStoreMessage() {
+        // The module is optional. Asking for it without adding the dependency must produce the
+        // FailureAnalyzer message that names the problem, not a NoClassDefFoundError from a bean
+        // method that should never have been evaluated.
+        runner.withPropertyValues("idempotency.store=caffeine")
+                .withClassLoader(new FilteredClassLoader(CaffeineIdempotencyStore.class))
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("No IdempotencyStore is configured");
                 });
     }
 
@@ -178,7 +207,7 @@ class IdempotencyAutoConfigurationTest {
         // StringRedisTemplate as long as a RedisConnectionFactory exists - verified here against
         // the real autoconfiguration, not a hand-rolled stand-in.
         new WebApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(DataRedisAutoConfiguration.class,
+                .withConfiguration(AutoConfigurations.of(springRedisAutoConfiguration(),
                         IdempotencyAutoConfiguration.class, IdempotencyStoreFallbackAutoConfiguration.class))
                 .withUserConfiguration(RedisConnectionFactoryOnlyConfiguration.class, CustomNonStringRedisTemplateConfiguration.class)
                 .run(ctx -> {
@@ -199,6 +228,90 @@ class IdempotencyAutoConfigurationTest {
                     assertThat(props.getReleaseOn())
                             .containsExactlyInAnyOrder(IdempotencyProperties.ReleaseOn.FIVE_XX,
                                     IdempotencyProperties.ReleaseOn.TIMEOUT);
+                });
+    }
+
+    // --- Micrometer metrics wiring -----------------------------------------------------------
+
+    @Test
+    void noMeterRegistry_keepsTheNoOpMetrics() {
+        // Micrometer is on this test classpath but no registry bean exists - the common shape for an
+        // application that has the jar transitively and never configured actuator. Injecting a
+        // MeterRegistry here would fail startup over something entirely optional.
+        runner.withUserConfiguration(RedisTemplateConfiguration.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(IdempotencyMetrics.class);
+                    assertThat(ctx.getBean(IdempotencyMetrics.class))
+                            .isInstanceOf(NoOpIdempotencyMetrics.class);
+                });
+    }
+
+    @Test
+    void aMeterRegistryBeanSwitchesMetricsToMicrometer() {
+        metricsRunner().withUserConfiguration(RedisTemplateConfiguration.class, MeterRegistryConfiguration.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean(IdempotencyMetrics.class))
+                            .as("the Micrometer implementation must win over the no-op fallback, which "
+                                    + "only works because IdempotencyMetricsAutoConfiguration is ordered before")
+                            .isNotInstanceOf(NoOpIdempotencyMetrics.class);
+                });
+    }
+
+    @Test
+    void metricsCanBeDisabledEvenWithARegistryPresent() {
+        metricsRunner().withUserConfiguration(RedisTemplateConfiguration.class, MeterRegistryConfiguration.class)
+                .withPropertyValues("idempotency.metrics.enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean(IdempotencyMetrics.class))
+                            .isInstanceOf(NoOpIdempotencyMetrics.class);
+                });
+    }
+
+    @Test
+    void aUserSuppliedMetricsBeanStillWins() {
+        metricsRunner().withUserConfiguration(RedisTemplateConfiguration.class, MeterRegistryConfiguration.class,
+                        CustomMetricsConfiguration.class)
+                .run(ctx -> assertThat(ctx.getBean(IdempotencyMetrics.class))
+                        .isSameAs(CustomMetricsConfiguration.CUSTOM));
+    }
+
+    /** The default runner does not load the metrics autoconfiguration; these cases need it. */
+    private WebApplicationContextRunner metricsRunner() {
+        return new WebApplicationContextRunner().withConfiguration(AutoConfigurations.of(
+                IdempotencyMetricsAutoConfiguration.class,
+                IdempotencyAutoConfiguration.class,
+                IdempotencyStoreFallbackAutoConfiguration.class));
+    }
+
+    // --- SQL dialect selection ---------------------------------------------------------------
+
+    @Test
+    void dialectAutoDetectionDoesNotTouchTheDatabaseAtStartup() {
+        // DataSourceConfiguration points at a Postgres that is not running. Startup must still
+        // succeed: an unreachable database is a request-time condition that
+        // idempotency.on-store-failure decides what to do about, and detecting the dialect eagerly
+        // would promote it to a startup failure and take the application down instead.
+        runner.withUserConfiguration(DataSourceConfiguration.class)
+                .withPropertyValues("idempotency.store=jdbc")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(IdempotencySqlDialect.class);
+                    assertThat(ctx.getBean(IdempotencySqlDialect.class).name())
+                            .as("resolving the name must not be what forces a connection either")
+                            .isEqualTo("auto (not yet resolved)");
+                });
+    }
+
+    @Test
+    void anExplicitDialectSkipsDetectionEntirely() {
+        runner.withUserConfiguration(DataSourceConfiguration.class)
+                .withPropertyValues("idempotency.store=jdbc", "idempotency.jdbc.dialect=mysql")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean(IdempotencySqlDialect.class).name()).isEqualTo("MySQL");
                 });
     }
 
@@ -289,7 +402,9 @@ class IdempotencyAutoConfigurationTest {
         }
         assertThat(lines).containsExactlyInAnyOrder(
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyAutoConfiguration",
-                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration");
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyMetricsAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyWebFluxAutoConfiguration");
     }
 
     @Test
@@ -392,6 +507,45 @@ class IdempotencyAutoConfigurationTest {
             template.setConnectionFactory(factory);
             template.afterPropertiesSet();
             return template;
+        }
+    }
+
+    /**
+     * Boot 4 renamed and repackaged Redis autoconfiguration ({@code DataRedisAutoConfiguration}) from
+     * the Boot 3 {@code RedisAutoConfiguration}. This test needs the real one - the whole point is to
+     * verify against Spring Boot&#39;s own autoconfiguration rather than a hand-rolled stand-in - so it is
+     * resolved by name and whichever generation is on the classpath wins.
+     */
+    private static Class<?> springRedisAutoConfiguration() {
+        for (String fqn : List.of(
+                "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration",
+                "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")) {
+            try {
+                return Class.forName(fqn);
+            } catch (ClassNotFoundException ignored) {
+                // Wrong generation - try the next.
+            }
+        }
+        throw new IllegalStateException(
+                "Neither the Boot 3 nor the Boot 4 Redis autoconfiguration is on the test classpath");
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class MeterRegistryConfiguration {
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomMetricsConfiguration {
+        static final IdempotencyMetrics CUSTOM = new IdempotencyMetrics() {
+        };
+
+        @Bean
+        IdempotencyMetrics idempotencyMetrics() {
+            return CUSTOM;
         }
     }
 }

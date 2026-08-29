@@ -8,20 +8,31 @@ dependencies {
     api(project(":idempotency-core"))
     compileOnly(project(":idempotency-store-redis"))
     compileOnly(project(":idempotency-store-jdbc"))
+    compileOnly(project(":idempotency-store-caffeine"))
+    compileOnly(project(":idempotency-webflux"))
     implementation("org.springframework.boot:spring-boot-autoconfigure")
     implementation("org.springframework.boot:spring-boot")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
 
     compileOnly("org.springframework.data:spring-data-redis")
     compileOnly("org.springframework:spring-jdbc")
+    // Optional: metrics are wired only when the application already has a MeterRegistry.
+    compileOnly("io.micrometer:micrometer-core")
+    // For HandlerMapping, referenced when wiring the filter-mode bean. Servlet MVC is
+    // always present at runtime under @ConditionalOnWebApplication(SERVLET), so compileOnly.
+    compileOnly("org.springframework:spring-webmvc")
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
+    testImplementation("io.micrometer:micrometer-core")
+    testImplementation(project(":idempotency-store-caffeine"))
+    testImplementation(project(":idempotency-webflux"))
+    testImplementation("org.springframework.boot:spring-boot-starter-webflux")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
-    // Spring Boot 4 split @AutoConfigureMockMvc out of spring-boot-test-autoconfigure into its
-    // own module; spring-boot-starter-test does not pull it in transitively.
-    testImplementation("org.springframework.boot:spring-boot-webmvc-test")
+    // No spring-boot-webmvc-test here on purpose: that module is Boot 4 only, and depending on it
+    // is what used to pin this suite to a single Boot generation. MockMvcTestConfiguration builds
+    // MockMvc from spring-test instead, which is identical on Boot 3 and 4.
     testImplementation("org.springframework.boot:spring-boot-starter-web")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
@@ -33,6 +44,8 @@ dependencies {
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:mysql")
+    testRuntimeOnly("com.mysql:mysql-connector-j")
     testImplementation("org.postgresql:postgresql")
 }
 

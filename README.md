@@ -70,7 +70,7 @@ spring:
   sql:
     init:
       mode: always
-      schema-locations: classpath:db/idempotency/postgres.sql # ships inside idempotency-store-jdbc
+      schema-locations: classpath:db/idempotency/postgres.sql # or mysql.sql - both ship inside idempotency-store-jdbc
 idempotency:
   store: jdbc   # required: AUTO never selects JDBC on its own, even with no Redis present
 ```
@@ -112,6 +112,8 @@ a silent execution of the wrong payload.
 | Property | Default | Notes |
 |---|---|---|
 | `idempotency.enabled` | `true` | Master switch |
+| `idempotency.mode` | `aspect` | `aspect` | `filter`. See Replay modes below |
+| `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode |
 | `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `memory` |
 | `idempotency.default-ttl` | `24h` | Overridable per-endpoint via `@Idempotent(ttl = "...")` |
 | `idempotency.header-name` | `Idempotency-Key` | Overridable via `@Idempotent(keyHeader = "...")` |
@@ -125,19 +127,22 @@ a silent execution of the wrong payload.
 | `idempotency.problem-details` | `true` | Registers the built-in RFC 9457 exception advice |
 | `idempotency.max-payload-size` | `256KB` | Larger responses execute normally but aren't cached for replay |
 | `idempotency.release-on` | `five_xx,timeout` | Outcomes that release instead of complete the key. Note the underscore: Spring's relaxed binding needs `five_xx`, not `5xx` |
+| `idempotency.caffeine.maximum-size` | `10000` | Ceiling on entries held by the Caffeine store; LRU beyond it |
 | `idempotency.redis.key-prefix` | `idempotency:` | |
 | `idempotency.jdbc.table-name` | `idempotency_record` | |
+| `idempotency.jdbc.dialect` | `auto` | `auto` | `postgres` | `mysql`. AUTO detects from the `DataSource` on first use, not at startup |
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
+| `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
 
 ## Store comparison
 
-| | Redis | JDBC (Postgres) |
+| | Redis | JDBC (Postgres / MySQL) |
 |---|---|---|
 | Guarantee | **At-least-once.** If the process crashes between the business transaction committing and the completion record being written, the key stays `IN_PROGRESS` until TTL and a retry re-executes. | **At-least-once by default; exactly-once with `idempotency.jdbc.join-transaction=true`.** Both modes are described below — read them before switching. |
 | Speed | Fast — a single round trip per claim. | Slower — shares the datasource and transaction. |
-| Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and `db/idempotency/postgres.sql` applied — see the JDBC quickstart above |
+| Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and the schema for your database applied — see the JDBC quickstart above |
 | Good for | The other 95% of use cases. | Payments and anything else where a replayed side effect is unacceptable, **if you use it the way described below.** |
 
 **Measured overhead** (200 requests, 20 warmup iterations, real Redis/Postgres via Testcontainers on
@@ -253,8 +258,11 @@ Being loud about these is what makes a library trustworthy:
   anything the handler writes directly to `HttpServletResponse` is not captured.
 - Does not work on streaming / SSE / `StreamingResponseBody` returns.
 - Does not handle multipart bodies in the fingerprint.
-- Postgres only for the JDBC store (MySQL is on the roadmap).
-- Servlet stack only (WebFlux is on the roadmap).
+- The JDBC store supports PostgreSQL and MySQL/MariaDB. Other engines need a new dialect.
+- `store=memory` never evicts expired entries, so it grows for as long as the process lives. It is
+  meant for tests and local development. For a single instance that stays up, use `store=caffeine`,
+  which has the same semantics plus real TTL eviction and a size ceiling.
+- WebFlux support covers `Mono` only, with a blocking store on `boundedElastic` and `scope=global`. See the WebFlux section.
 - AOP-based: self-invocation bypasses the proxy, same as `@Transactional`. A startup check warns
   if `@Idempotent` is found on a non-public method.
 - `idempotency.scope` defaults to `global` (no Spring Security needed) precisely so the Quickstart
@@ -305,6 +313,103 @@ polymorphic-deserialization gadget vector.
   over a servlet filter, the atomic claim, the failure policy, and what "exactly-once" does and
   doesn't mean here.
 
+## Metrics
+
+If your application already has a Micrometer `MeterRegistry` (adding `spring-boot-starter-actuator`
+is enough), the starter publishes counters automatically. There is nothing to configure.
+
+Everything lands on **one** counter, `idempotency.requests`, separated by an `outcome` tag:
+
+| `outcome` | Meaning |
+|---|---|
+| `executed` | Handler ran; the response was stored for replay |
+| `replayed` | A duplicate was answered from the store without executing |
+| `replayed_after_wait` | A `WAIT`-policy duplicate blocked, then replayed the first call’s response |
+| `released` | The key was released so a retry can re-execute (5xx, or a timeout) |
+| `conflict` | A duplicate arrived while the first was in flight and got a 409 |
+| `wait_timeout` | A `WAIT`-policy duplicate gave up waiting |
+| `fingerprint_mismatch` | Same key, different request body - the 422 case |
+| `missing_key` | No idempotency key on the request |
+| `store_failure` | The store was unreachable |
+| `principal_missing` | A `user`/`tenant`-scoped request had no resolvable principal |
+
+One name with a tag rather than ten names is deliberate: it lets you write a replay rate as a single
+ratio, and an outcome added in a later version shows up in your existing queries instead of being
+invisible until you update them.
+
+```promql
+# Replay rate: the share of idempotent traffic served without re-executing
+sum(rate(idempotency_requests_total{outcome="replayed"}[5m]))
+  / sum(rate(idempotency_requests_total[5m]))
+```
+
+Set `idempotency.metrics.enabled=false` to keep the no-op implementation, or register your own
+`IdempotencyMetrics` bean to route the same events somewhere else - the starter backs off from both.
+## WebFlux
+
+Add `idempotency-webflux` and `@Idempotent` works on reactive handlers that return `Mono`:
+
+```kotlin
+dependencies {
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-webflux:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
+}
+```
+
+```java
+@Idempotent
+@PostMapping("/orders")
+public Mono<ResponseEntity<OrderResponse>> placeOrder(@RequestBody OrderRequest request) { ... }
+```
+
+Nothing else to configure. The servlet and reactive aspects are mutually exclusive by construction,
+so an application gets exactly one.
+
+One thing is genuinely better here: `on-conflict=wait` occupies **no thread** while it waits, because
+the delay is a timer rather than a sleep. The thread-pool exhaustion documented under Limitations for
+the servlet stack does not apply.
+
+Three things to know before adopting it:
+
+- **Only `Mono` is advised.** A `Flux` is a stream, and this library replays a single captured
+  response - the same reason the servlet side does not support streaming. A `Flux`-returning handler
+  passes through untouched, with a WARN at startup rather than silent half-support.
+- **Stores are still blocking**, so store calls are scheduled onto `boundedElastic`. Correct, but an
+  idempotent endpoint costs two thread handoffs a plain one does not. A reactive store SPI (R2DBC,
+  reactive Redis) would remove that and is not in 0.3.0.
+- **`idempotency.scope` must be `global`.** `user` and `tenant` resolve the principal from
+  `SecurityContextHolder`, which is a ThreadLocal with no meaning on a reactive stack. Rather than
+  quietly falling back to global - which would share idempotency keys across users - startup fails
+  with an explanation.
+## Replay modes
+
+`idempotency.mode` decides *what* gets stored and replayed. Both modes select endpoints the same
+way - `@Idempotent` on the handler - and produce identical storage keys, so switching does not
+orphan existing records.
+
+| | `aspect` (default) | `filter` |
+|---|---|---|
+| Captures | The handler return value, re-serialized on replay | The real HTTP response bytes |
+| Body written directly to `HttpServletResponse` | **Not captured** | Replayed exactly |
+| Response headers | Rebuilt from the return value | Replayed from an allowlist |
+| Argument fingerprinting | Yes - same key, different body gets a 422 | **No** - see below |
+| Runs | Inside the handler invocation | Outside the whole dispatch |
+
+Use `filter` when the exact bytes matter: a handler that streams or writes its own response, a
+content type negotiated at write time, or a header added by a filter further down the chain. Aspect
+mode cannot see any of those, because it returns before the response is written at all.
+
+Two things to know:
+
+- **No argument fingerprinting in filter mode.** That check hashes resolved method arguments, which
+  do not exist yet outside the dispatch. The equivalent would be hashing the request body, which
+  means buffering every request - a real cost on every endpoint to serve one. So in filter mode a
+  duplicate key with a *different* body replays the original response rather than getting a 422.
+- **Headers are an allowlist, not everything.** Replaying `Set-Cookie` would hand a second caller
+  the first caller's session. Add your own via `idempotency.filter.replay-headers` if clients
+  depend on them.
+
 ## Extending
 
 Implement `IdempotencyStore` (four methods: `claim`, `complete`, `release`, `find`) and register
@@ -326,8 +431,13 @@ app's own `ObjectMapper`).
 
 | Starter version | Spring Boot | Java |
 |---|---|---|
+| 0.3.x | **3.5.x and 4.1.x** | 17+ |
 | 0.2.x | 4.1.x (Spring Framework 7) | 17+ |
 | 0.1.x | 4.1.x (Spring Framework 7) | 17+ |
+
+From 0.3.0 there is **one artifact for both Spring Boot generations** - no `-boot3` classifier and no
+separate version line. Every Spring API the library uses exists in both, so it is compiled against the
+lower bound and the full suite runs against both in CI on every push.
 
 ## Roadmap
 

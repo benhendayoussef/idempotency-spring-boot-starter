@@ -9,22 +9,31 @@ package io.github.benhendayoussef.idempotency.behavior;
  * tries to supply its own default (an unconfigured DataSource fails eagerly; a default security
  * filter chain requires authentication for every request) - neither of which the test wants.
  */
-final class TestAutoconfigExcludes {
+public final class TestAutoconfigExcludes {
 
+    // Both generations are named. Boot ignores an exclude entry whose class is not on the
+    // classpath, so the pair is safe on either - and naming only one would silently stop
+    // excluding anything on the other, letting Boot supply the very DataSource these tests
+    // exist to run without.
     private static final String NO_DATASOURCE =
-            "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration";
+            "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration";
     // Excludes only the autoconfiguration that installs Boot's default restrictive filter chain -
     // not the base SecurityAutoConfiguration, which also registers the SecurityProperties bean
     // other core Boot autoconfigurations (error handling) depend on regardless of whether a
     // security filter chain is wanted.
     private static final String NO_SECURITY =
-            "org.springframework.boot.security.autoconfigure.web.servlet.ServletWebSecurityAutoConfiguration";
+            "org.springframework.boot.security.autoconfigure.web.servlet.ServletWebSecurityAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration";
+
+    /** For tests that configure no DataSource of their own but do want default security. */
+    public static final String EXCLUDE_DATASOURCE = "spring.autoconfigure.exclude=" + NO_DATASOURCE;
 
     /** For JDBC-store tests: they need a real DataSource, just not Boot's default security. */
-    static final String EXCLUDE_SECURITY = "spring.autoconfigure.exclude=" + NO_SECURITY;
+    public static final String EXCLUDE_SECURITY = "spring.autoconfigure.exclude=" + NO_SECURITY;
 
     /** For Redis-store/in-memory-store tests: need neither a DataSource nor default security. */
-    static final String EXCLUDE_DATASOURCE_AND_SECURITY =
+    public static final String EXCLUDE_DATASOURCE_AND_SECURITY =
             "spring.autoconfigure.exclude=" + NO_DATASOURCE + "," + NO_SECURITY;
 
     private TestAutoconfigExcludes() {

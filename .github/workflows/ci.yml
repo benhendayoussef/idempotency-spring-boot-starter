@@ -7,6 +7,22 @@ on:
 
 jobs:
   build:
+    # The whole suite runs against both supported Spring Boot generations from one source tree.
+    # Nothing in the library is version-specific - the matrix exists to keep it that way, since the
+    # ways these two diverge (autoconfiguration package renames, which ObjectMapper wins
+    # @ConditionalOnMissingBean) all fail silently rather than at compile time.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The lower bound, and what the published artifacts are compiled against.
+          - spring-boot: '3.5.6'
+            label: 'Spring Boot 3.5'
+          - spring-boot: '4.1.0'
+            label: 'Spring Boot 4.1'
+
+    name: ${{ matrix.label }}
+
     # Docker is preinstalled on GitHub-hosted ubuntu-latest runners, required for the
     # Testcontainers-backed idempotency-store-redis/idempotency-store-jdbc test suites.
     runs-on: ubuntu-latest
@@ -23,7 +39,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build and test
-        run: ./gradlew clean build
+        run: ./gradlew -PspringBootVersion=${{ matrix.spring-boot }} clean build
 
       # Virtual threads don't exist on the project's pinned Java 17 toolchain; this task runs the
       # same test sources on a separately-provisioned JDK 21+ launcher without changing what the
@@ -35,11 +51,11 @@ jobs:
           java-version: '21'
 
       - name: Virtual threads check
-        run: ./gradlew :idempotency-spring-boot-starter:testVirtualThreads
+        run: ./gradlew -PspringBootVersion=${{ matrix.spring-boot }} :idempotency-spring-boot-starter:testVirtualThreads
 
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports
+          name: test-reports-boot-${{ matrix.spring-boot }}
           path: '**/build/reports/tests/'

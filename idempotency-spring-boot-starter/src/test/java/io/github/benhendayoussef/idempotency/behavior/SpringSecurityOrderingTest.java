@@ -12,9 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -37,8 +37,9 @@ import org.springframework.web.bind.annotation.RestController;
         classes = {SpringSecurityOrderingTest.TestApp.class, SpringSecurityOrderingTest.SecurityConfig.class,
                 SpringSecurityOrderingTest.SecuredController.class},
         properties = {"idempotency.store=memory",
-                "spring.autoconfigure.exclude=org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration"})
-@AutoConfigureMockMvc
+                // Shared constant so this names both Boot generations - see TestAutoconfigExcludes.
+                TestAutoconfigExcludes.EXCLUDE_DATASOURCE})
+@Import(MockMvcTestConfiguration.class)
 class SpringSecurityOrderingTest {
 
     @Autowired

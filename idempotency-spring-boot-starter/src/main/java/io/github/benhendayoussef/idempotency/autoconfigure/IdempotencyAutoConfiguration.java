@@ -15,14 +15,21 @@ import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyExceptionHandler;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyKeyComposer;
 import io.github.benhendayoussef.idempotency.internal.InMemoryIdempotencyStore;
+import io.github.benhendayoussef.idempotency.internal.filter.IdempotencyFilter;
 import io.github.benhendayoussef.idempotency.internal.NoOpIdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.internal.scope.GlobalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.PrincipalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.TenantScopeResolver;
+import io.github.benhendayoussef.idempotency.store.caffeine.internal.CaffeineIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencyRecordSweeper;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySweeperScheduler;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySqlDialect;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.LazySqlDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.MySqlDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.PostgresDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.SqlDialectResolver;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcTransactionRunner;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import java.util.EnumMap;
@@ -32,6 +39,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -45,6 +53,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
@@ -56,12 +65,36 @@ import org.springframework.transaction.PlatformTransactionManager;
 // Referenced by name, not by class literal: both are optional (compileOnly) and may not be on
 // the classpath at all, unlike a hard `after = {Foo.class}` this doesn't fail attribute
 // introspection when the referenced autoconfiguration is absent.
+//
+// Both Boot generations are listed because Boot 4 moved these autoconfigurations into per-module
+// packages. Naming only one generation would not fail on the other - it would silently match
+// nothing, so the store beans could be evaluated before the DataSource or StringRedisTemplate they
+// depend on exists. A name matching nothing is simply ignored, which is what makes listing all four
+// safe on both. See IdempotencyAutoConfigurationOrderingTest.
 @AutoConfiguration(afterName = {
+        // Spring Boot 4.x
         "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration",
-        "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration"
+        "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
+        // Spring Boot 3.x
+        "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration",
+        "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
+        // Jackson, both generations. Not about bean availability like the four above - this one
+        // decides who owns the application-wide ObjectMapper. idempotencyPayloadObjectMapper is a
+        // bean of type ObjectMapper, and Spring Boot declares its own @Primary one behind
+        // @ConditionalOnMissingBean. Register ours first and Boot backs off entirely, so the
+        // starter-internal mapper silently becomes the mapper the application serializes every HTTP
+        // response with - and any IdempotencyObjectMapperCustomizer leaks into the app's own wire
+        // format. Ordering after Jackson means Boot's @Primary mapper always wins for the
+        // application and ours stays private to replay storage.
+        "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
+        "org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration"
 })
 @ConditionalOnProperty(prefix = "idempotency", name = "enabled", matchIfMissing = true)
-@ConditionalOnWebApplication(type = Type.SERVLET)
+// Any web application, not just servlet. Everything in this class except the aspect itself - store
+// selection, the payload mapper, fingerprinting, metrics, scope resolvers - is stack-agnostic, and
+// gating the whole class on SERVLET left a WebFlux application with no store at all. Only the
+// servlet aspect is servlet-specific, so only it carries the narrower condition.
+@ConditionalOnWebApplication
 @EnableConfigurationProperties(IdempotencyProperties.class)
 public class IdempotencyAutoConfiguration {
 
@@ -137,12 +170,17 @@ public class IdempotencyAutoConfiguration {
         return map;
     }
 
+    // ASPECT is the default, and matchIfMissing keeps an application that never set idempotency.mode
+    // on exactly the behaviour it had before the property existed.
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnWebApplication(type = Type.SERVLET)
+    @ConditionalOnProperty(prefix = "idempotency", name = "mode", havingValue = "aspect", matchIfMissing = true)
     public IdempotencyAspect idempotencyAspect(IdempotencyStore store, IdempotencyProperties props,
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes,
-            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            @Qualifier("idempotencyPayloadObjectMapper") ObjectMapper idempotencyPayloadObjectMapper,
+            IdempotencyMetrics metrics,
             ObjectProvider<TransactionRunner> transactionRunner) {
         TransactionRunner runner = transactionRunner.getIfAvailable();
         if (runner == null && props.getJdbc().isJoinTransaction()) {
@@ -156,6 +194,22 @@ public class IdempotencyAutoConfiguration {
         }
         return new IdempotencyAspect(store, props, fingerprinter, composer, scopes,
                 idempotencyPayloadObjectMapper, metrics, runner);
+    }
+
+    /**
+     * Filter mode. Mutually exclusive with the aspect above by property value, so exactly one of the
+     * two is ever registered - running both would have each claim the same key for the same request.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "idempotency", name = "mode", havingValue = "filter")
+    public IdempotencyFilter idempotencyFilter(IdempotencyStore store, IdempotencyProperties props,
+            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            ObjectProvider<HandlerMapping> handlerMappings) {
+        // ObjectProvider, not a direct List injection: the filter is created while the mapping beans
+        // are still being built, and demanding them eagerly here deadlocks context startup.
+        return new IdempotencyFilter(store, props, idempotencyPayloadObjectMapper, metrics,
+                handlerMappings.orderedStream().toList());
     }
 
     @Bean
@@ -176,7 +230,8 @@ public class IdempotencyAutoConfiguration {
         @ConditionalOnMissingBean(IdempotencyStore.class)
         @ConditionalOnBean(StringRedisTemplate.class)
         IdempotencyStore redisIdempotencyStore(StringRedisTemplate redisTemplate,
-                ObjectMapper idempotencyPayloadObjectMapper, IdempotencyProperties props) {
+                @Qualifier("idempotencyPayloadObjectMapper") ObjectMapper idempotencyPayloadObjectMapper,
+                IdempotencyProperties props) {
             return new RedisIdempotencyStore(redisTemplate, idempotencyPayloadObjectMapper,
                     props.getRedis().getKeyPrefix());
         }
@@ -188,10 +243,27 @@ public class IdempotencyAutoConfiguration {
     static class JdbcStoreConfiguration {
 
         @Bean
+        @ConditionalOnMissingBean(IdempotencySqlDialect.class)
+        @ConditionalOnBean(DataSource.class)
+        IdempotencySqlDialect idempotencySqlDialect(DataSource dataSource, IdempotencyProperties props) {
+            return switch (props.getJdbc().getDialect()) {
+                case POSTGRES -> new PostgresDialect();
+                case MYSQL -> new MySqlDialect();
+                // Detection opens one connection at startup. That is a deliberate trade: the
+                // alternative is discovering the wrong SQL was chosen from a duplicate execution
+                // in production, which is untraceable back to here.
+                case AUTO -> new LazySqlDialect(dataSource);
+            };
+        }
+
+        @Bean
         @ConditionalOnMissingBean(IdempotencyStore.class)
         @ConditionalOnBean(DataSource.class)
-        IdempotencyStore jdbcIdempotencyStore(DataSource dataSource, IdempotencyProperties props) {
-            return new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource), props.getJdbc().getTableName());
+        IdempotencyStore jdbcIdempotencyStore(DataSource dataSource, IdempotencyProperties props,
+                IdempotencySqlDialect dialect) {
+            log.debug("Idempotency JDBC store using the {} dialect", dialect.name());
+            return new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource),
+                    props.getJdbc().getTableName(), dialect);
         }
 
         @Bean
@@ -232,6 +304,21 @@ public class IdempotencyAutoConfiguration {
                         + "idempotency.jdbc.join-transaction=false to keep the at-least-once default.");
             }
             return new JdbcTransactionRunner(manager);
+        }
+    }
+
+    // Guards on the store class too, not just the property: idempotency-store-caffeine is optional
+    // (compileOnly here), so a user who set store=caffeine without adding the dependency must fall
+    // through to the fallback autoconfiguration and get its actionable message, not a NoClassDefFound.
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(CaffeineIdempotencyStore.class)
+    @ConditionalOnProperty(prefix = "idempotency", name = "store", havingValue = "caffeine")
+    static class CaffeineStoreConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(IdempotencyStore.class)
+        IdempotencyStore caffeineIdempotencyStore(IdempotencyProperties props) {
+            return new CaffeineIdempotencyStore(props.getCaffeine().getMaximumSize());
         }
     }
 

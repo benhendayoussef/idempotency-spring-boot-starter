@@ -3,6 +3,8 @@ package io.github.benhendayoussef.idempotency.config;
 import io.github.benhendayoussef.idempotency.api.ConflictPolicy;
 import io.github.benhendayoussef.idempotency.api.IdempotencyScope;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.EnumSet;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,6 +20,13 @@ public class IdempotencyProperties {
 
     /** Master switch. */
     private boolean enabled = true;
+
+    /**
+     * How responses are captured and replayed. ASPECT stores the handler return value and
+     * re-serializes it; FILTER stores the real HTTP response bytes, so anything written straight to
+     * the response - or added by a later filter - replays exactly. Mutually exclusive.
+     */
+    private Mode mode = Mode.ASPECT;
 
     /** Which {@code IdempotencyStore} backs replay. {@code AUTO} picks Redis when it's on the classpath. */
     private StoreType store = StoreType.AUTO;
@@ -72,6 +81,10 @@ public class IdempotencyProperties {
 
     private final Redis redis = new Redis();
     private final Jdbc jdbc = new Jdbc();
+    private final Caffeine caffeine = new Caffeine();
+
+    private final Metrics metrics = new Metrics();
+    private final Filter filter = new Filter();
 
     public boolean isEnabled() {
         return enabled;
@@ -79,6 +92,14 @@ public class IdempotencyProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public Mode getMode() {
+        return mode;
+    }
+
+    public void setMode(Mode mode) {
+        this.mode = mode;
     }
 
     public StoreType getStore() {
@@ -193,21 +214,74 @@ public class IdempotencyProperties {
         this.releaseOn = releaseOn;
     }
 
+    public Caffeine getCaffeine() {
+        return caffeine;
+    }
+
+    public Filter getFilter() {
+        return filter;
+    }
+
     public Redis getRedis() {
         return redis;
+    }
+
+    public Metrics getMetrics() {
+        return metrics;
     }
 
     public Jdbc getJdbc() {
         return jdbc;
     }
 
-    public enum StoreType { AUTO, REDIS, JDBC, MEMORY }
+    public enum StoreType { AUTO, REDIS, JDBC, CAFFEINE, MEMORY }
 
     public enum OnStoreFailure { PROCEED, FAIL }
 
     public enum OnMissingPrincipal { GLOBAL, SKIP, REJECT }
 
     public enum ReleaseOn { FIVE_XX, TIMEOUT }
+
+    public static class Caffeine {
+
+        /**
+         * Ceiling on entries held. Eviction normally happens by TTL; this is the backstop for when
+         * new keys arrive faster than old ones expire, so memory stays bounded instead of tracking
+         * traffic. Least-recently-used entries go first, which for idempotency keys means the ones
+         * least likely to still be retried.
+         */
+        private long maximumSize = 10_000;
+
+        public long getMaximumSize() {
+            return maximumSize;
+        }
+
+        public void setMaximumSize(long maximumSize) {
+            this.maximumSize = maximumSize;
+        }
+    }
+    public enum Dialect { AUTO, POSTGRES, MYSQL }
+    public enum Mode { ASPECT, FILTER }
+
+    public static class Filter {
+
+        /**
+         * Response headers replayed verbatim, by name. An allowlist rather than everything:
+         * replaying Set-Cookie would hand a second caller the first one's session, and replaying a
+         * stale Date or Content-Length would contradict the response actually being written. Add
+         * your own headers here if clients depend on them.
+         */
+        private List<String> replayHeaders = new ArrayList<>(List.of(
+                "Content-Type", "Location", "ETag", "Cache-Control"));
+
+        public List<String> getReplayHeaders() {
+            return replayHeaders;
+        }
+
+        public void setReplayHeaders(List<String> replayHeaders) {
+            this.replayHeaders = replayHeaders;
+        }
+    }
 
     public static class Redis {
 
@@ -246,6 +320,14 @@ public class IdempotencyProperties {
          */
         private boolean joinTransaction = false;
 
+        /**
+         * Which SQL dialect the store speaks. AUTO asks the DataSource what it is connected to at
+         * startup, which is right almost always; set it explicitly for a database that reports a
+         * product name AUTO does not recognise, or to fail fast on a misconfigured DataSource
+         * rather than silently getting the wrong SQL.
+         */
+        private Dialect dialect = Dialect.AUTO;
+
         public String getTableName() {
             return tableName;
         }
@@ -270,12 +352,38 @@ public class IdempotencyProperties {
             this.sweeperInterval = sweeperInterval;
         }
 
+        public Dialect getDialect() {
+            return dialect;
+        }
+
+        public void setDialect(Dialect dialect) {
+            this.dialect = dialect;
+        }
+
         public boolean isJoinTransaction() {
             return joinTransaction;
         }
 
         public void setJoinTransaction(boolean joinTransaction) {
             this.joinTransaction = joinTransaction;
+        }
+    }
+
+    public static class Metrics {
+
+        /**
+         * Publish idempotency counters to Micrometer when a MeterRegistry is present. Set false to
+         * keep the no-op implementation even in an application that has a registry - for instance
+         * where cardinality budgets are tight and these counters are not wanted.
+         */
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 }
