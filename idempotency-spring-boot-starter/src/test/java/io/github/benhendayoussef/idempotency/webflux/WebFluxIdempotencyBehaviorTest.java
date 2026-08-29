@@ -3,6 +3,7 @@ package io.github.benhendayoussef.idempotency.webflux;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.benhendayoussef.idempotency.api.Idempotent;
+import io.github.benhendayoussef.idempotency.behavior.TestAutoconfigExcludes;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -42,8 +43,10 @@ import reactor.core.publisher.Mono;
                 // be forced, or this would silently exercise the servlet aspect instead.
                 "spring.main.web-application-type=reactive",
                 // Likewise spring-boot-starter-jdbc: without this Boot tries to build a DataSource
-                // that this test never configures.
-                "spring.autoconfigure.exclude=org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration"})
+                // that this test never configures. Via the shared constant, which names both Boot
+                // generations - hardcoding the Boot 4 class here matched nothing on Boot 3, so every
+                // test in this class failed on a DataSource that should never have been created.
+                TestAutoconfigExcludes.EXCLUDE_DATASOURCE})
 class WebFluxIdempotencyBehaviorTest {
 
     @Autowired

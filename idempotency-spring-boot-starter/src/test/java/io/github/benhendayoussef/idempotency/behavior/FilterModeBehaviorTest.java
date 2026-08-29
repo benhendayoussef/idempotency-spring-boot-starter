@@ -19,9 +19,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -42,7 +42,7 @@ import org.springframework.web.bind.annotation.RestController;
         classes = FilterModeBehaviorTest.FilterApp.class,
         properties = {"idempotency.mode=filter", "idempotency.store=memory",
                 TestAutoconfigExcludes.EXCLUDE_DATASOURCE_AND_SECURITY})
-@AutoConfigureMockMvc
+@Import(MockMvcTestConfiguration.class)
 class FilterModeBehaviorTest {
 
     @Autowired
