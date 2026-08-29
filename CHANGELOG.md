@@ -8,6 +8,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Spring Boot 3 support.** One artifact now works on Boot 3.5.x and 4.1.x - no `-boot3`
+  classifier and no separate version line. Every Spring API the library uses exists in both, so it
+  is compiled against the lower bound and the full suite runs against both generations in CI.
+- MySQL and MariaDB support for the JDBC store, selected by `idempotency.jdbc.dialect` (`auto` by
+  default, detected from the `DataSource` on first use). Schema ships as
+  `db/idempotency/mysql.sql`. The full behavioural matrix, including the concurrency soak, runs
+  against a real MySQL.
 - Micrometer metrics, wired automatically when the application has a `MeterRegistry`. Every outcome
   lands on one counter, `idempotency.requests`, tagged by `outcome` - so a replay rate is a single
   ratio rather than a hard-coded list of metric names. `idempotency.metrics.enabled=false` opts out;
@@ -28,6 +35,12 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- The starter-internal payload `ObjectMapper` could win Spring Boot's
+  `@ConditionalOnMissingBean(ObjectMapper.class)` race, making Boot back off entirely — so the
+  library's private mapper silently became the mapper the whole application serialized every HTTP
+  response with, and any `IdempotencyObjectMapperCustomizer` leaked into the application's own wire
+  format. Present in 0.1 and 0.2. The autoconfiguration is now ordered after Jackson's, and both
+  injection points bind by qualifier.
 - `IdempotencyAutoConfiguration` was gated entirely on a servlet web application, so everything in
   it - store selection, the payload mapper, fingerprinting, metrics - was unavailable to any
   non-servlet stack. Only the servlet aspect needed that condition.
