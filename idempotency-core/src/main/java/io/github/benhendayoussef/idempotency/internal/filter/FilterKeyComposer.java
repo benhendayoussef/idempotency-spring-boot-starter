@@ -1,6 +1,6 @@
 package io.github.benhendayoussef.idempotency.internal.filter;
 
-import io.github.benhendayoussef.idempotency.internal.Hashing;
+import io.github.benhendayoussef.idempotency.api.IdempotencyKeys;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Objects;
 import org.springframework.web.servlet.HandlerMapping;
@@ -24,6 +24,6 @@ final class FilterKeyComposer {
         String route = Objects.toString(
                 request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE),
                 request.getRequestURI());
-        return Hashing.sha256Hex(namespace + '|' + request.getMethod() + '|' + route + '|' + clientKey);
+        return IdempotencyKeys.storageKey(clientKey, request.getMethod(), route, namespace);
     }
 }

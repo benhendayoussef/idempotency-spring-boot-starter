@@ -1,6 +1,6 @@
 package io.github.benhendayoussef.idempotency.webflux.internal;
 
-import io.github.benhendayoussef.idempotency.internal.Hashing;
+import io.github.benhendayoussef.idempotency.api.IdempotencyKeys;
 import java.util.Objects;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.server.ServerWebExchange;
@@ -28,6 +28,6 @@ final class ReactiveKeyComposer {
         Object pattern = exchange.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         String route = Objects.toString(pattern, exchange.getRequest().getPath().value());
         String method = exchange.getRequest().getMethod().name();
-        return Hashing.sha256Hex(namespace + '|' + method + '|' + route + '|' + clientKey);
+        return IdempotencyKeys.storageKey(clientKey, method, route, namespace);
     }
 }

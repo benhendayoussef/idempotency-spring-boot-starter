@@ -21,6 +21,9 @@ dependencies {
     // For HandlerMapping, referenced when wiring the filter-mode bean. Servlet MVC is
     // always present at runtime under @ConditionalOnWebApplication(SERVLET), so compileOnly.
     compileOnly("org.springframework:spring-webmvc")
+    // Optional: the management endpoint is registered only when actuator is present.
+    compileOnly("org.springframework.boot:spring-boot-actuator")
+    compileOnly("org.springframework.boot:spring-boot-actuator-autoconfigure")
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
@@ -28,6 +31,7 @@ dependencies {
     testImplementation(project(":idempotency-store-caffeine"))
     testImplementation(project(":idempotency-webflux"))
     testImplementation("org.springframework.boot:spring-boot-starter-webflux")
+    testImplementation("org.springframework.boot:spring-boot-starter-actuator")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
     // No spring-boot-webmvc-test here on purpose: that module is Boot 4 only, and depending on it

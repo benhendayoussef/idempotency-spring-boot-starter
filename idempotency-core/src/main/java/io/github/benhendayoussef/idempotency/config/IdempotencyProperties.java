@@ -31,8 +31,29 @@ public class IdempotencyProperties {
     /** Which {@code IdempotencyStore} backs replay. {@code AUTO} picks Redis when it's on the classpath. */
     private StoreType store = StoreType.AUTO;
 
-    /** How long a claimed key (and its completed record) is retained when {@code @Idempotent#ttl()} is not set. */
+    /** How long a completed response stays replayable, when {@code @Idempotent#ttl()} is not set. See {@code claimTtl} for the in-flight lease. */
     private Duration defaultTtl = Duration.ofHours(24);
+
+    /**
+     * How long a claim may be held before the holder is presumed dead and the key becomes
+     * reclaimable.
+     *
+     * <p>Distinct from {@code default-ttl}, which is how long a <em>completed</em> response stays
+     * replayable. Before 0.4 these were one value, so a process that died mid-request locked its key
+     * for the whole retention window - 24 hours by default, during which every retry got a 409 and
+     * nothing short of deleting the row could clear it.
+     *
+     * <p><strong>This must be longer than your slowest handler.</strong> If a claim expires while the
+     * request is still running, a concurrent duplicate reclaims the key and both execute - the exact
+     * failure this library exists to prevent. The default is deliberately generous against typical
+     * proxy and load-balancer timeouts (30-60s); raise it if you have handlers that legitimately run
+     * longer.
+     *
+     * <p>Capped at the retention TTL in effect for the request: asking for a 30-second idempotency
+     * window should not leave a dead claim sitting for five minutes. That cap also means this
+     * property can never hold a claim <em>longer</em> than 0.3 did.
+     */
+    private Duration claimTtl = Duration.ofMinutes(5);
 
     /** Request header carrying the client-supplied idempotency key, when {@code @Idempotent#keyHeader()} is not set. */
     private String headerName = "Idempotency-Key";
@@ -108,6 +129,26 @@ public class IdempotencyProperties {
 
     public void setStore(StoreType store) {
         this.store = store;
+    }
+
+    public Duration getClaimTtl() {
+        return claimTtl;
+    }
+
+    public void setClaimTtl(Duration claimTtl) {
+        this.claimTtl = claimTtl;
+    }
+
+    /**
+     * The claim TTL to use for a request whose completed record will be retained for
+     * {@code retentionTtl}.
+     *
+     * <p>Lives here rather than in the aspect because all three execution paths - the servlet
+     * aspect, the reactive aspect and the filter - need the same answer, and three copies of a
+     * {@code min} is three chances to drift.
+     */
+    public Duration claimTtlFor(Duration retentionTtl) {
+        return claimTtl.compareTo(retentionTtl) < 0 ? claimTtl : retentionTtl;
     }
 
     public Duration getDefaultTtl() {

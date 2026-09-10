@@ -404,7 +404,8 @@ class IdempotencyAutoConfigurationTest {
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyAutoConfiguration",
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration",
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyMetricsAutoConfiguration",
-                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyWebFluxAutoConfiguration");
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyWebFluxAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyEndpointAutoConfiguration");
     }
 
     @Test

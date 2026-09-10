@@ -10,7 +10,7 @@
     },
     {
       "name": "idempotency.default-ttl",
-      "description": "How long a claimed key (and its completed record) is retained when @Idempotent#ttl() is not set."
+      "description": "How long a completed response stays replayable, when @Idempotent#ttl() is not set. See idempotency.claim-ttl for the separate in-flight lease."
     },
     {
       "name": "idempotency.header-name",
@@ -95,6 +95,10 @@
     {
       "name": "idempotency.filter.replay-headers",
       "description": "Response headers replayed verbatim in filter mode, by name. An allowlist: replaying Set-Cookie would hand a second caller the first caller session."
+    },
+    {
+      "name": "idempotency.claim-ttl",
+      "description": "How long a claim may be held before the holder is presumed dead and the key becomes reclaimable. Distinct from default-ttl, which is how long a completed response stays replayable. Must be longer than your slowest handler: if a claim expires while the request is still running, a concurrent duplicate reclaims the key and both execute. Capped at the retention TTL in effect for the request."
     }
   ],
   "hints": [

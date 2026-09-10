@@ -145,7 +145,10 @@ public class IdempotencyAspect implements Ordered {
         for (int attempt = 0; attempt < 2; attempt++) {
             ClaimResult claim;
             try {
-                claim = store.claim(storeKey, fp, ttl);
+                // claimTtlFor, not ttl: the claim is a lease on an in-flight request, the retention
+                // TTL is how long the finished response stays replayable. Passing one value for both
+                // is what let a crashed process lock a key for 24 hours.
+                claim = store.claim(storeKey, fp, props.claimTtlFor(ttl));
             } catch (RuntimeException e) {
                 return handleStoreFailure(pjp, e);
             }
