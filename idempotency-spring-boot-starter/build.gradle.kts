@@ -54,6 +54,17 @@ dependencies {
 val coreJarTask = project(":idempotency-core").tasks.named<Jar>("jar")
 tasks.test {
     dependsOn(coreJarTask)
+
+    // InternalPackagesAreDisclaimedTest reads the source tree rather than the classpath, because a
+    // javadoc-only package-info.java produces no .class file. That same fact means Gradle sees no
+    // input change when one is added or deleted, so without declaring the sources explicitly the
+    // test is skipped as UP-TO-DATE in exactly the case it exists to catch. Verified: removing a
+    // package-info and running `gradlew test` passed until this was added.
+    inputs.files(
+        rootProject.subprojects.mapNotNull { sub ->
+            sub.layout.projectDirectory.dir("src/main/java").asFile.takeIf { it.exists() }
+        }
+    ).withPropertyName("mainSourcesForPackageInfoScan").withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("coreJarPath", coreJarTask.get().archiveFile.get().asFile.absolutePath)
     // Virtual threads don't exist on Java 17 (this module's pinned toolchain); this test needs a
     // real embedded server + a JDK 21+ runtime to be meaningful at all, so it runs only via the
