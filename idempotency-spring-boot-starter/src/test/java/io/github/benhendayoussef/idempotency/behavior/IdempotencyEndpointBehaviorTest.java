@@ -32,7 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
                 // Actuator hides everything but health/info by default - that default is why this
                 // endpoint is not a surprise, so the test has to opt in the same way an operator does.
                 "management.endpoints.web.exposure.include=idempotency",
-                TestAutoconfigExcludes.EXCLUDE_DATASOURCE_SECURITY_AND_MANAGEMENT
+                TestAutoconfigExcludes.EXCLUDE_DATASOURCE_AND_SECURITY
         })
 @Import(MockMvcTestConfiguration.class)
 class IdempotencyEndpointBehaviorTest {
