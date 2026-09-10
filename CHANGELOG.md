@@ -4,6 +4,34 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A process that died mid-request locked its idempotency key for the full retention window** -
+  24 hours by default. The claim and the completed record shared one TTL, so every retry of that
+  request got a 409 for a day, and the expired-row sweeper could not help because it only deletes
+  rows already past expiry. `idempotency.claim-ttl` (default `5m`) now governs the in-flight claim
+  separately.
+
+  **Behaviour change.** `claim-ttl` must be longer than your slowest handler: a lease expiring
+  mid-flight lets a concurrent duplicate reclaim the key and both execute. The default is generous
+  against typical proxy timeouts, and the lease is capped at the retention TTL in effect - so it can
+  never hold a claim longer than 0.3 did. Raise it if you have handlers that legitimately run for
+  more than five minutes.
+
+### Added
+
+- `IdempotencyKeys` - supported API for deriving the storage key that `IdempotencyStore.find` and
+  `release` take. Both methods were public but their key could only be computed by internal code,
+  which made them unusable from outside exactly when you needed them. It is now the single
+  definition of the key format, shared by the servlet, reactive and filter paths.
+- An actuator endpoint (`/actuator/idempotency`) to inspect or evict a single key - the remedy for
+  a claim stuck `IN_PROGRESS`. Reports the stored payload’s size rather than its content, and stays
+  unreachable until explicitly exposed, since evicting a key defeats idempotency for a named
+  request.
+- Every `internal` package now declares that it is not supported API, guarded by a test.
+  `store/caffeine/internal`, `webflux/internal` and `internal/filter` shipped in 0.3 without one -
+  the last because Java does not inherit `package-info` into subpackages.
+
 ## [0.3.0] - 2026-08-28
 
 ### Added

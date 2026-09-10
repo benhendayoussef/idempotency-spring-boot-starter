@@ -137,10 +137,11 @@ a silent execution of the wrong payload.
 | Property | Default | Notes |
 |---|---|---|
 | `idempotency.enabled` | `true` | Master switch |
-| `idempotency.mode` | `aspect` | `aspect` | `filter`. See Replay modes below |
+| `idempotency.mode` | `aspect` | `aspect` | `filter`. See [Replay modes](#replay-modes) below |
 | `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode |
 | `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `caffeine` \| `memory` |
-| `idempotency.default-ttl` | `24h` | Overridable per-endpoint via `@Idempotent(ttl = "...")` |
+| `idempotency.default-ttl` | `24h` | How long a **completed response** stays replayable. Overridable per-endpoint via `@Idempotent(ttl = "...")` |
+| `idempotency.claim-ttl` | `5m` | How long an **in-flight claim** is held before the holder is presumed dead. Must exceed your slowest handler — [see below](#the-two-ttls) |
 | `idempotency.header-name` | `Idempotency-Key` | Overridable via `@Idempotent(keyHeader = "...")` |
 | `idempotency.require-key` | `false` | `true` rejects keyless requests with 400 instead of passing them through |
 | `idempotency.on-conflict` | `wait` | `wait` polls the in-flight request; `fail_fast` returns 409 immediately |
@@ -160,6 +161,29 @@ a silent execution of the wrong payload.
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
 | `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
+
+## The two TTLs
+
+A key has two lifetimes, and conflating them is a trap worth understanding:
+
+| | Governs | Default |
+|---|---|---|
+| `claim-ttl` | How long an **in-flight** claim is held before the holder is presumed dead | `5m` |
+| `default-ttl` | How long a **completed** response stays replayable | `24h` |
+
+Until 0.4 these were one value. That meant a process dying mid-request - a deploy, an OOM, a
+scale-down - left its key `IN_PROGRESS` for the whole retention window. With the 24h default, every
+retry of that request got a `409` **for a day**, and the sweeper could not help because it only
+deletes rows that are already past expiry.
+
+> **`claim-ttl` must be longer than your slowest handler.** If a claim expires while the request is
+> still running, a concurrent duplicate reclaims the key and both execute - the exact failure this
+> library exists to prevent. The 5-minute default is deliberately generous against typical proxy and
+> load-balancer timeouts; raise it if you have handlers that legitimately run longer.
+
+The lease is capped at the retention TTL in effect, so asking for a 30-second idempotency window
+never leaves a dead claim sitting for five minutes - and it can never hold a claim *longer* than
+0.3 did.
 
 ## Store comparison
 
@@ -434,6 +458,56 @@ Two things to know:
 - **Headers are an allowlist, not everything.** Replaying `Set-Cookie` would hand a second caller
   the first caller's session. Add your own via `idempotency.filter.replay-headers` if clients
   depend on them.
+
+## Operations
+
+### Inspecting and evicting a key
+
+When a process dies mid-request its key stays `IN_PROGRESS` until the [claim lease](#the-two-ttls)
+expires, and retries get a `409` until it does. If you need that key back sooner, expose the
+management endpoint:
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,idempotency
+```
+
+```bash
+# What is holding this key?
+curl "localhost:8080/actuator/idempotency?key=abc123&method=POST&route=/orders"
+# {"storageKey":"...","found":true,"state":"IN_PROGRESS","createdAt":"..."}
+
+# Let the customer retry now.
+curl -X DELETE "localhost:8080/actuator/idempotency?key=abc123&method=POST&route=/orders"
+```
+
+Pass the **route pattern**, not the request URI - `/orders/{id}`, not `/orders/42` - and add
+`&namespace=alice` for a `user`- or `tenant`-scoped endpoint. Get either wrong and you get a
+valid-looking key that addresses nothing, which is why the response tells you plainly when it
+evicted nothing.
+
+The stored response body is deliberately **not** returned; the endpoint reports its size instead.
+That body is your application’s own response, frequently customer data.
+
+> **This endpoint is sensitive.** Evicting a key lets the next duplicate execute for real, so anyone
+> who can reach it can defeat idempotency for a request they can name. Actuator exposes only
+> `health` and `info` by default - secure it like any other management endpoint.
+
+### Computing a storage key yourself
+
+`IdempotencyStore.find` and `release` take the hashed storage key. `IdempotencyKeys` derives it, so
+you can use the store SPI directly from your own admin tooling or tests:
+
+```java
+String storageKey = IdempotencyKeys.storageKey("abc123", "POST", "/orders");
+store.find(storageKey).ifPresent(record -> ...);
+```
+
+It is the single definition of the key format, shared by the servlet, reactive and filter paths - so
+a key means the same thing on every stack.
 
 ## Extending
 
