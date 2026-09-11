@@ -123,7 +123,7 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
 
         ClaimResult claim;
         try {
-            claim = store.claim(storeKey, fingerprint, ttl);
+            claim = store.claim(storeKey, fingerprint, props.claimTtlFor(ttl));
         } catch (RuntimeException e) {
             metrics.storeFailure();
             if (props.getOnStoreFailure() == IdempotencyProperties.OnStoreFailure.FAIL) {

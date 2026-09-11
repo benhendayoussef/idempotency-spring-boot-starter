@@ -9,6 +9,7 @@ import io.github.benhendayoussef.idempotency.api.IdempotencyScope;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import io.github.benhendayoussef.idempotency.api.NoScopeResolverConfiguredException;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
+import io.github.benhendayoussef.idempotency.api.IdempotencyTracer;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.ArgumentFingerprinter;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
@@ -17,6 +18,7 @@ import io.github.benhendayoussef.idempotency.internal.IdempotencyKeyComposer;
 import io.github.benhendayoussef.idempotency.internal.InMemoryIdempotencyStore;
 import io.github.benhendayoussef.idempotency.internal.filter.IdempotencyFilter;
 import io.github.benhendayoussef.idempotency.internal.NoOpIdempotencyMetrics;
+import io.github.benhendayoussef.idempotency.internal.TracedIdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.internal.TransactionRunner;
 import io.github.benhendayoussef.idempotency.internal.scope.GlobalScopeResolver;
 import io.github.benhendayoussef.idempotency.internal.scope.PrincipalScopeResolver;
@@ -180,7 +182,7 @@ public class IdempotencyAutoConfiguration {
             ArgumentFingerprinter fingerprinter, IdempotencyKeyComposer composer,
             Map<IdempotencyScope, ScopeResolver> scopes,
             @Qualifier("idempotencyPayloadObjectMapper") ObjectMapper idempotencyPayloadObjectMapper,
-            IdempotencyMetrics metrics,
+            IdempotencyMetrics metrics, ObjectProvider<IdempotencyTracer> tracer,
             ObjectProvider<TransactionRunner> transactionRunner) {
         TransactionRunner runner = transactionRunner.getIfAvailable();
         if (runner == null && props.getJdbc().isJoinTransaction()) {
@@ -193,7 +195,8 @@ public class IdempotencyAutoConfiguration {
                     + "remains at-least-once.", props.getStore());
         }
         return new IdempotencyAspect(store, props, fingerprinter, composer, scopes,
-                idempotencyPayloadObjectMapper, metrics, runner);
+                idempotencyPayloadObjectMapper,
+                TracedIdempotencyMetrics.wrap(metrics, tracer.getIfAvailable()), runner);
     }
 
     /**
@@ -205,10 +208,12 @@ public class IdempotencyAutoConfiguration {
     @ConditionalOnProperty(prefix = "idempotency", name = "mode", havingValue = "filter")
     public IdempotencyFilter idempotencyFilter(IdempotencyStore store, IdempotencyProperties props,
             ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            ObjectProvider<IdempotencyTracer> tracer,
             ObjectProvider<HandlerMapping> handlerMappings) {
         // ObjectProvider, not a direct List injection: the filter is created while the mapping beans
         // are still being built, and demanding them eagerly here deadlocks context startup.
-        return new IdempotencyFilter(store, props, idempotencyPayloadObjectMapper, metrics,
+        return new IdempotencyFilter(store, props, idempotencyPayloadObjectMapper,
+                TracedIdempotencyMetrics.wrap(metrics, tracer.getIfAvailable()),
                 handlerMappings.orderedStream().toList());
     }
 

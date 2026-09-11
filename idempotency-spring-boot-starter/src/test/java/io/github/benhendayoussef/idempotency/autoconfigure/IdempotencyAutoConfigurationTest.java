@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.benhendayoussef.idempotency.api.IdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
+import io.github.benhendayoussef.idempotency.api.IdempotencyTracer;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
@@ -15,6 +16,8 @@ import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotency
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.test.simple.SimpleTracer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -278,6 +281,55 @@ class IdempotencyAutoConfigurationTest {
                         .isSameAs(CustomMetricsConfiguration.CUSTOM));
     }
 
+    // --- tracing -----------------------------------------------------------------------------
+
+    @Test
+    void noTracerBean_registersNoTracerAtAll() {
+        // micrometer-tracing is on this test classpath but nothing publishes a Tracer - the shape of
+        // any application that pulled it in transitively and never configured tracing. Injecting a
+        // Tracer here would fail startup over something entirely optional.
+        tracingRunner().withUserConfiguration(RedisTemplateConfiguration.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).doesNotHaveBean(IdempotencyTracer.class);
+                });
+    }
+
+    @Test
+    void aTracerBeanIsEnoughToTurnTracingOn() {
+        tracingRunner().withUserConfiguration(RedisTemplateConfiguration.class, TracerConfiguration.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(IdempotencyTracer.class);
+                });
+    }
+
+    @Test
+    void tracingCanBeDisabledEvenWithATracerPresent() {
+        tracingRunner().withUserConfiguration(RedisTemplateConfiguration.class, TracerConfiguration.class)
+                .withPropertyValues("idempotency.tracing.enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).doesNotHaveBean(IdempotencyTracer.class);
+                });
+    }
+
+    @Test
+    void aUserSuppliedTracerBeanStillWins() {
+        tracingRunner().withUserConfiguration(RedisTemplateConfiguration.class, TracerConfiguration.class,
+                        CustomTracerConfiguration.class)
+                .run(ctx -> assertThat(ctx.getBean(IdempotencyTracer.class))
+                        .isSameAs(CustomTracerConfiguration.CUSTOM));
+    }
+
+    /** The default runner does not load the tracing autoconfiguration; these cases need it. */
+    private WebApplicationContextRunner tracingRunner() {
+        return new WebApplicationContextRunner().withConfiguration(AutoConfigurations.of(
+                IdempotencyTracingAutoConfiguration.class,
+                IdempotencyAutoConfiguration.class,
+                IdempotencyStoreFallbackAutoConfiguration.class));
+    }
+
     /** The default runner does not load the metrics autoconfiguration; these cases need it. */
     private WebApplicationContextRunner metricsRunner() {
         return new WebApplicationContextRunner().withConfiguration(AutoConfigurations.of(
@@ -404,7 +456,9 @@ class IdempotencyAutoConfigurationTest {
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyAutoConfiguration",
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyStoreFallbackAutoConfiguration",
                 "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyMetricsAutoConfiguration",
-                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyWebFluxAutoConfiguration");
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyTracingAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyWebFluxAutoConfiguration",
+                "io.github.benhendayoussef.idempotency.autoconfigure.IdempotencyEndpointAutoConfiguration");
     }
 
     @Test
@@ -535,6 +589,25 @@ class IdempotencyAutoConfigurationTest {
         @Bean
         MeterRegistry meterRegistry() {
             return new SimpleMeterRegistry();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TracerConfiguration {
+        @Bean
+        Tracer tracer() {
+            return new SimpleTracer();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomTracerConfiguration {
+        static final IdempotencyTracer CUSTOM = outcome -> {
+        };
+
+        @Bean
+        IdempotencyTracer idempotencyTracer() {
+            return CUSTOM;
         }
     }
 

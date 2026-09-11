@@ -27,8 +27,8 @@ replayed** — not a re-execution, not an error.
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.4.0")
 }
 ```
 
@@ -54,8 +54,8 @@ The JDBC store needs more setup than swapping one dependency — all of the foll
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.4.0")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     runtimeOnly("org.postgresql:postgresql")
 }
@@ -89,8 +89,8 @@ acceptable:
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
-    implementation("io.github.benhendayoussef:idempotency-store-caffeine:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0")
+    implementation("io.github.benhendayoussef:idempotency-store-caffeine:0.4.0")
 }
 ```
 
@@ -137,10 +137,11 @@ a silent execution of the wrong payload.
 | Property | Default | Notes |
 |---|---|---|
 | `idempotency.enabled` | `true` | Master switch |
-| `idempotency.mode` | `aspect` | `aspect` | `filter`. See Replay modes below |
+| `idempotency.mode` | `aspect` | `aspect` | `filter`. See [Replay modes](#replay-modes) below |
 | `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode |
 | `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `caffeine` \| `memory` |
-| `idempotency.default-ttl` | `24h` | Overridable per-endpoint via `@Idempotent(ttl = "...")` |
+| `idempotency.default-ttl` | `24h` | How long a **completed response** stays replayable. Overridable per-endpoint via `@Idempotent(ttl = "...")` |
+| `idempotency.claim-ttl` | `5m` | How long an **in-flight claim** is held before the holder is presumed dead. Must exceed your slowest handler — [see below](#the-two-ttls) |
 | `idempotency.header-name` | `Idempotency-Key` | Overridable via `@Idempotent(keyHeader = "...")` |
 | `idempotency.require-key` | `false` | `true` rejects keyless requests with 400 instead of passing them through |
 | `idempotency.on-conflict` | `wait` | `wait` polls the in-flight request; `fail_fast` returns 409 immediately |
@@ -159,7 +160,32 @@ a silent execution of the wrong payload.
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
+| `idempotency.jdbc.on-silent-rollback` | `return_response` | What a caller gets when a handler marks the shared transaction rollback-only and then returns success. `return_response` sends what the handler returned; `fail` returns 500, because the response describes data that was never committed. Only reachable with `join-transaction=true` |
 | `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
+| `idempotency.tracing.enabled` | `true` | Tag the request's span with `idempotency.outcome` when a Micrometer Tracing `Tracer` exists. No effect without one |
+
+## The two TTLs
+
+A key has two lifetimes, and conflating them is a trap worth understanding:
+
+| | Governs | Default |
+|---|---|---|
+| `claim-ttl` | How long an **in-flight** claim is held before the holder is presumed dead | `5m` |
+| `default-ttl` | How long a **completed** response stays replayable | `24h` |
+
+Until 0.4 these were one value. That meant a process dying mid-request - a deploy, an OOM, a
+scale-down - left its key `IN_PROGRESS` for the whole retention window. With the 24h default, every
+retry of that request got a `409` **for a day**, and the sweeper could not help because it only
+deletes rows that are already past expiry.
+
+> **`claim-ttl` must be longer than your slowest handler.** If a claim expires while the request is
+> still running, a concurrent duplicate reclaims the key and both execute - the exact failure this
+> library exists to prevent. The 5-minute default is deliberately generous against typical proxy and
+> load-balancer timeouts; raise it if you have handlers that legitimately run longer.
+
+The lease is capped at the retention TTL in effect, so asking for a 30-second idempotency window
+never leaves a dead claim sitting for five minutes - and it can never hold a claim *longer* than
+0.3 did.
 
 ## Store comparison
 
@@ -236,6 +262,13 @@ transactional ones:
   The 4xx record is written after the rollback in its own transaction, so a retry gets the same
   deterministic client error — but the business data that error described is gone. Don't build a 4xx
   body out of rows written in the same request.
+- **A handler that calls `setRollbackOnly()` and then returns a success status is ambiguous**, and
+  you choose which half to believe with `idempotency.jdbc.on-silent-rollback`. The default,
+  `return_response`, sends what the handler returned — the behaviour in every release so far. Set it
+  to `fail` and the caller gets a 500 instead, on the grounds that a `201 Created` describing a row
+  that rolled back is worse than an error. Either way the key is released, so a retry re-executes.
+  Only reachable in joined mode: without it the handler rolls back its own transaction and the
+  library never hears about it.
 - **Replays still open zero transactions.** The aspect answers from the store without calling
   `proceed()`, so the transaction manager is never touched — the whole reason for the aspect
   ordering, and asserted directly in the test suite.
@@ -370,15 +403,44 @@ sum(rate(idempotency_requests_total{outcome="replayed"}[5m]))
 
 Set `idempotency.metrics.enabled=false` to keep the no-op implementation, or register your own
 `IdempotencyMetrics` bean to route the same events somewhere else - the starter backs off from both.
+
+## Tracing
+
+A replay is the most confusing span in a distributed trace. The endpoint was called, it returned
+`201`, it opened no transaction, issued no query, made no downstream call, and took two
+milliseconds. That reads as a handler that silently did nothing.
+
+If your application has a Micrometer Tracing `Tracer` — `spring-boot-starter-actuator` plus a
+bridge such as `micrometer-tracing-bridge-otel` or `-brave` — the starter tags the **request's own
+span** with what it did:
+
+```
+idempotency.outcome = replayed
+```
+
+The values are exactly the `outcome` tag values in the table above, so a Prometheus rate and a
+trace-search filter select the same population.
+
+The tag goes on the existing server span rather than in a child span of its own. A child span would
+put the answer one level down from where you are already looking, add a span to every request in
+the system to carry a single string, and still leave the trace list inexplicable to anyone scanning
+it. Nothing is added when the request is not sampled.
+
+Set `idempotency.tracing.enabled=false` to leave traces untouched, or register your own
+`IdempotencyTracer` bean to send the outcome somewhere else — an OpenTelemetry attribute, an MDC
+entry, an audit trail. The starter backs off from both. This works in all three execution paths
+(aspect, filter mode and WebFlux); on WebFlux it relies on Reactor context propagation, which Spring
+Boot enables when tracing is configured.
+
 ## WebFlux
 
 Add `idempotency-webflux` and `@Idempotent` works on reactive handlers that return `Mono`:
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
-    implementation("io.github.benhendayoussef:idempotency-webflux:0.3.0")
-    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0")
+    implementation("io.github.benhendayoussef:idempotency-webflux:0.4.0")
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.4.0")
 }
 ```
 
@@ -402,7 +464,7 @@ Three things to know before adopting it:
   passes through untouched, with a WARN at startup rather than silent half-support.
 - **Stores are still blocking**, so store calls are scheduled onto `boundedElastic`. Correct, but an
   idempotent endpoint costs two thread handoffs a plain one does not. A reactive store SPI (R2DBC,
-  reactive Redis) would remove that and is not in 0.3.0.
+  reactive Redis) would remove that and is not in 0.4.0.
 - **`idempotency.scope` must be `global`.** `user` and `tenant` resolve the principal from
   `SecurityContextHolder`, which is a ThreadLocal with no meaning on a reactive stack. Rather than
   quietly falling back to global - which would share idempotency keys across users - startup fails
@@ -435,6 +497,56 @@ Two things to know:
   the first caller's session. Add your own via `idempotency.filter.replay-headers` if clients
   depend on them.
 
+## Operations
+
+### Inspecting and evicting a key
+
+When a process dies mid-request its key stays `IN_PROGRESS` until the [claim lease](#the-two-ttls)
+expires, and retries get a `409` until it does. If you need that key back sooner, expose the
+management endpoint:
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,idempotency
+```
+
+```bash
+# What is holding this key?
+curl "localhost:8080/actuator/idempotency?key=abc123&method=POST&route=/orders"
+# {"storageKey":"...","found":true,"state":"IN_PROGRESS","createdAt":"..."}
+
+# Let the customer retry now.
+curl -X DELETE "localhost:8080/actuator/idempotency?key=abc123&method=POST&route=/orders"
+```
+
+Pass the **route pattern**, not the request URI - `/orders/{id}`, not `/orders/42` - and add
+`&namespace=alice` for a `user`- or `tenant`-scoped endpoint. Get either wrong and you get a
+valid-looking key that addresses nothing, which is why the response tells you plainly when it
+evicted nothing.
+
+The stored response body is deliberately **not** returned; the endpoint reports its size instead.
+That body is your application’s own response, frequently customer data.
+
+> **This endpoint is sensitive.** Evicting a key lets the next duplicate execute for real, so anyone
+> who can reach it can defeat idempotency for a request they can name. Actuator exposes only
+> `health` and `info` by default - secure it like any other management endpoint.
+
+### Computing a storage key yourself
+
+`IdempotencyStore.find` and `release` take the hashed storage key. `IdempotencyKeys` derives it, so
+you can use the store SPI directly from your own admin tooling or tests:
+
+```java
+String storageKey = IdempotencyKeys.storageKey("abc123", "POST", "/orders");
+store.find(storageKey).ifPresent(record -> ...);
+```
+
+It is the single definition of the key format, shared by the servlet, reactive and filter paths - so
+a key means the same thing on every stack.
+
 ## Extending
 
 Implement `IdempotencyStore` (four methods: `claim`, `complete`, `release`, `find`) and register
@@ -448,7 +560,8 @@ IdempotencyStore idempotencyStore(/* ... */) {
 ```
 
 Other extension points: `ScopeResolver` (custom key namespacing), `IdempotencyMetrics` (wire up
-Micrometer or anything else), and `IdempotencyObjectMapperCustomizer` (register your application's
+Micrometer or anything else), `IdempotencyTracer` (send the per-request outcome to your own tracing
+or audit sink), and `IdempotencyObjectMapperCustomizer` (register your application's
 Jackson modules on the starter's internal payload mapper — it deliberately never reuses your
 app's own `ObjectMapper`).
 
@@ -456,6 +569,7 @@ app's own `ObjectMapper`).
 
 | Starter version | Spring Boot | Java |
 |---|---|---|
+| 0.4.x | **3.5.x and 4.1.x** | 17+ |
 | 0.3.x | **3.5.x and 4.1.x** | 17+ |
 | 0.2.x | 4.1.x (Spring Framework 7) | 17+ |
 | 0.1.x | 4.1.x (Spring Framework 7) | 17+ |
@@ -469,9 +583,12 @@ lower bound and the full suite runs against both in CI on every push.
 - **0.2** — ✅ Genuine exactly-once for the JDBC store via `idempotency.jdbc.join-transaction`
 - **0.3** — ✅ Spring Boot 3 support, Micrometer metrics, MySQL/MariaDB store, Caffeine store,
   WebFlux (`Mono` handlers), and `mode: filter` for byte-exact replay
-- **0.4** — A reactive store SPI (R2DBC, reactive Redis), so WebFlux no longer schedules blocking
+- **0.4** — Operability: a claim lease separate from the retention window, `IdempotencyKeys` for
+  addressing a record from your own code, an actuator endpoint to inspect and evict one, and an
+  `idempotency.outcome` tag on the request's trace span
+- **0.5** — A reactive store SPI (R2DBC, reactive Redis), so WebFlux no longer schedules blocking
   store calls onto `boundedElastic`; GraalVM native image hints
-- **0.5** — Kotlin coroutine support, `@Idempotent` on `@KafkaListener`
+- **0.6** — Kotlin coroutine support, `@Idempotent` on `@KafkaListener`
 
 ## Contributing
 

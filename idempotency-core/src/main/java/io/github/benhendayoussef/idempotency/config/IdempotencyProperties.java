@@ -31,8 +31,29 @@ public class IdempotencyProperties {
     /** Which {@code IdempotencyStore} backs replay. {@code AUTO} picks Redis when it's on the classpath. */
     private StoreType store = StoreType.AUTO;
 
-    /** How long a claimed key (and its completed record) is retained when {@code @Idempotent#ttl()} is not set. */
+    /** How long a completed response stays replayable, when {@code @Idempotent#ttl()} is not set. See {@code claimTtl} for the in-flight lease. */
     private Duration defaultTtl = Duration.ofHours(24);
+
+    /**
+     * How long a claim may be held before the holder is presumed dead and the key becomes
+     * reclaimable.
+     *
+     * <p>Distinct from {@code default-ttl}, which is how long a <em>completed</em> response stays
+     * replayable. Before 0.4 these were one value, so a process that died mid-request locked its key
+     * for the whole retention window - 24 hours by default, during which every retry got a 409 and
+     * nothing short of deleting the row could clear it.
+     *
+     * <p><strong>This must be longer than your slowest handler.</strong> If a claim expires while the
+     * request is still running, a concurrent duplicate reclaims the key and both execute - the exact
+     * failure this library exists to prevent. The default is deliberately generous against typical
+     * proxy and load-balancer timeouts (30-60s); raise it if you have handlers that legitimately run
+     * longer.
+     *
+     * <p>Capped at the retention TTL in effect for the request: asking for a 30-second idempotency
+     * window should not leave a dead claim sitting for five minutes. That cap also means this
+     * property can never hold a claim <em>longer</em> than 0.3 did.
+     */
+    private Duration claimTtl = Duration.ofMinutes(5);
 
     /** Request header carrying the client-supplied idempotency key, when {@code @Idempotent#keyHeader()} is not set. */
     private String headerName = "Idempotency-Key";
@@ -84,6 +105,7 @@ public class IdempotencyProperties {
     private final Caffeine caffeine = new Caffeine();
 
     private final Metrics metrics = new Metrics();
+    private final Tracing tracing = new Tracing();
     private final Filter filter = new Filter();
 
     public boolean isEnabled() {
@@ -108,6 +130,26 @@ public class IdempotencyProperties {
 
     public void setStore(StoreType store) {
         this.store = store;
+    }
+
+    public Duration getClaimTtl() {
+        return claimTtl;
+    }
+
+    public void setClaimTtl(Duration claimTtl) {
+        this.claimTtl = claimTtl;
+    }
+
+    /**
+     * The claim TTL to use for a request whose completed record will be retained for
+     * {@code retentionTtl}.
+     *
+     * <p>Lives here rather than in the aspect because all three execution paths - the servlet
+     * aspect, the reactive aspect and the filter - need the same answer, and three copies of a
+     * {@code min} is three chances to drift.
+     */
+    public Duration claimTtlFor(Duration retentionTtl) {
+        return claimTtl.compareTo(retentionTtl) < 0 ? claimTtl : retentionTtl;
     }
 
     public Duration getDefaultTtl() {
@@ -230,6 +272,10 @@ public class IdempotencyProperties {
         return metrics;
     }
 
+    public Tracing getTracing() {
+        return tracing;
+    }
+
     public Jdbc getJdbc() {
         return jdbc;
     }
@@ -262,6 +308,8 @@ public class IdempotencyProperties {
     }
     public enum Dialect { AUTO, POSTGRES, MYSQL }
     public enum Mode { ASPECT, FILTER }
+
+    public enum OnSilentRollback { RETURN_RESPONSE, FAIL }
 
     public static class Filter {
 
@@ -321,6 +369,21 @@ public class IdempotencyProperties {
         private boolean joinTransaction = false;
 
         /**
+         * What a caller gets when a handler marks the shared transaction rollback-only and then
+         * returns a success response.
+         *
+         * <p>Nothing was committed, but the handler chose to report success - so the caller is told
+         * "Created" about data that does not exist. Only reachable with
+         * {@code join-transaction=true}, since without joining the handler rolls back its own
+         * transaction and the library never learns about it.
+         *
+         * <p>Defaults to {@code RETURN_RESPONSE}, which is what 0.1 through 0.4 did: the handler
+         * made two explicit choices and the library reports the one it returned. Teams who consider
+         * that a lie to the caller can set {@code FAIL} and get a 500 instead.
+         */
+        private OnSilentRollback onSilentRollback = OnSilentRollback.RETURN_RESPONSE;
+
+        /**
          * Which SQL dialect the store speaks. AUTO asks the DataSource what it is connected to at
          * startup, which is right almost always; set it explicitly for a database that reports a
          * product name AUTO does not recognise, or to fail fast on a misconfigured DataSource
@@ -360,6 +423,14 @@ public class IdempotencyProperties {
             this.dialect = dialect;
         }
 
+        public OnSilentRollback getOnSilentRollback() {
+            return onSilentRollback;
+        }
+
+        public void setOnSilentRollback(OnSilentRollback onSilentRollback) {
+            this.onSilentRollback = onSilentRollback;
+        }
+
         public boolean isJoinTransaction() {
             return joinTransaction;
         }
@@ -375,6 +446,25 @@ public class IdempotencyProperties {
          * Publish idempotency counters to Micrometer when a MeterRegistry is present. Set false to
          * keep the no-op implementation even in an application that has a registry - for instance
          * where cardinality budgets are tight and these counters are not wanted.
+         */
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+    }
+
+    public static class Tracing {
+
+        /**
+         * Tag the request's trace span with what @Idempotent did, when the application has a
+         * Micrometer Tracer. Set false to leave traces untouched - for instance where span
+         * attributes are billed per byte, or where an operator would rather not have the fact
+         * that a request was a replay visible to everyone who can read a trace.
          */
         private boolean enabled = true;
 

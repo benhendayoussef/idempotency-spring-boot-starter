@@ -18,16 +18,26 @@ dependencies {
     compileOnly("org.springframework:spring-jdbc")
     // Optional: metrics are wired only when the application already has a MeterRegistry.
     compileOnly("io.micrometer:micrometer-core")
+    // Optional: tracing is wired only when the application already has a Tracer.
+    compileOnly("io.micrometer:micrometer-tracing")
     // For HandlerMapping, referenced when wiring the filter-mode bean. Servlet MVC is
     // always present at runtime under @ConditionalOnWebApplication(SERVLET), so compileOnly.
     compileOnly("org.springframework:spring-webmvc")
+    // Optional: the management endpoint is registered only when actuator is present.
+    compileOnly("org.springframework.boot:spring-boot-actuator")
+    compileOnly("org.springframework.boot:spring-boot-actuator-autoconfigure")
 
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
     testImplementation("io.micrometer:micrometer-core")
+    testImplementation("io.micrometer:micrometer-tracing")
+    // SimpleTracer records spans and their tags in memory - a real Tracer implementation with no
+    // exporter, collector or OTel/Brave bridge to stand up just to assert one tag.
+    testImplementation("io.micrometer:micrometer-tracing-test")
     testImplementation(project(":idempotency-store-caffeine"))
     testImplementation(project(":idempotency-webflux"))
     testImplementation("org.springframework.boot:spring-boot-starter-webflux")
+    testImplementation("org.springframework.boot:spring-boot-starter-actuator")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
     // No spring-boot-webmvc-test here on purpose: that module is Boot 4 only, and depending on it
@@ -54,6 +64,17 @@ dependencies {
 val coreJarTask = project(":idempotency-core").tasks.named<Jar>("jar")
 tasks.test {
     dependsOn(coreJarTask)
+
+    // InternalPackagesAreDisclaimedTest reads the source tree rather than the classpath, because a
+    // javadoc-only package-info.java produces no .class file. That same fact means Gradle sees no
+    // input change when one is added or deleted, so without declaring the sources explicitly the
+    // test is skipped as UP-TO-DATE in exactly the case it exists to catch. Verified: removing a
+    // package-info and running `gradlew test` passed until this was added.
+    inputs.files(
+        rootProject.subprojects.mapNotNull { sub ->
+            sub.layout.projectDirectory.dir("src/main/java").asFile.takeIf { it.exists() }
+        }
+    ).withPropertyName("mainSourcesForPackageInfoScan").withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("coreJarPath", coreJarTask.get().archiveFile.get().asFile.absolutePath)
     // Virtual threads don't exist on Java 17 (this module's pinned toolchain); this test needs a
     // real embedded server + a JDK 21+ runtime to be meaningful at all, so it runs only via the

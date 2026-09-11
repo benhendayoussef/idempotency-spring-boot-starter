@@ -145,7 +145,7 @@ public class ReactiveIdempotencyAspect implements Ordered {
         // response also completes empty, so the handler ran a second time - and a replay of that
         // stored empty response ran it a third. Emptiness is a valid outcome here, so it cannot
         // double as a control signal.
-        return blocking(() -> store.claim(storeKey, fingerprint, ttl))
+        return blocking(() -> store.claim(storeKey, fingerprint, props.claimTtlFor(ttl)))
                 .map(java.util.Optional::of)
                 .onErrorResume(RuntimeException.class, this::onClaimFailure)
                 .flatMap(claim -> claim

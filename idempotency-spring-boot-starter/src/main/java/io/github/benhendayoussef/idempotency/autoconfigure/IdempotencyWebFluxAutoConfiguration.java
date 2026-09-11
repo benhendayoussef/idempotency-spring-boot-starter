@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.benhendayoussef.idempotency.api.IdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.api.IdempotencyScope;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
+import io.github.benhendayoussef.idempotency.api.IdempotencyTracer;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.ArgumentFingerprinter;
+import io.github.benhendayoussef.idempotency.internal.TracedIdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.webflux.internal.IdempotencyExchangeContextFilter;
 import io.github.benhendayoussef.idempotency.webflux.internal.ReactiveIdempotencyAspect;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -44,7 +47,8 @@ public class IdempotencyWebFluxAutoConfiguration {
     @Bean
     public ReactiveIdempotencyAspect reactiveIdempotencyAspect(IdempotencyStore store,
             IdempotencyProperties props, ArgumentFingerprinter fingerprinter,
-            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics) {
+            ObjectMapper idempotencyPayloadObjectMapper, IdempotencyMetrics metrics,
+            ObjectProvider<IdempotencyTracer> tracer) {
         if (props.getScope() != IdempotencyScope.GLOBAL) {
             throw new IllegalStateException(
                     "idempotency.scope=" + props.getScope().name().toLowerCase()
@@ -53,7 +57,8 @@ public class IdempotencyWebFluxAutoConfiguration {
                     + "Falling back to GLOBAL silently would share idempotency keys across users, so "
                     + "this fails instead. Set idempotency.scope=global, or use the servlet stack.");
         }
-        return new ReactiveIdempotencyAspect(store, props, fingerprinter, idempotencyPayloadObjectMapper, metrics);
+        return new ReactiveIdempotencyAspect(store, props, fingerprinter, idempotencyPayloadObjectMapper,
+                TracedIdempotencyMetrics.wrap(metrics, tracer.getIfAvailable()));
     }
 
     @Bean
