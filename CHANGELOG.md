@@ -28,6 +28,13 @@ All notable changes to this project are documented in this file.
   a claim stuck `IN_PROGRESS`. Reports the stored payload’s size rather than its content, and stays
   unreachable until explicitly exposed, since evicting a key defeats idempotency for a named
   request.
+- **Tracing.** When the application has a Micrometer Tracing `Tracer`, the request's own span is
+  tagged `idempotency.outcome` with what the library did. A replayed request - 201, no query, no
+  downstream call, two milliseconds - was previously indistinguishable in a trace from a handler
+  that silently did nothing. The values are the same as the `outcome` tag on
+  `idempotency.requests`, so a metric and a trace filter select the same population. Turn it off
+  with `idempotency.tracing.enabled=false`, or replace it with an `IdempotencyTracer` bean. Applies
+  to the aspect, filter mode and WebFlux alike.
 - `idempotency.jdbc.on-silent-rollback` - what a caller gets when a handler marks the shared
   transaction rollback-only and then returns a success status. The default, `return_response`,
   sends what the handler returned and keeps the behaviour of every release so far; `fail` returns

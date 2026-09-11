@@ -81,6 +81,10 @@
       "description": "Publish idempotency counters to Micrometer when a MeterRegistry is present. All outcomes land on one counter, idempotency.requests, tagged by outcome (executed, replayed, released, conflict, ...). Set false to keep the no-op implementation even in an application that has a registry."
     },
     {
+      "name": "idempotency.tracing.enabled",
+      "description": "Tag the request's trace span with what the library did (idempotency.outcome), when a Micrometer Tracer is present. The tag values are the same as the outcome tag on idempotency.requests, so a metric and a trace filter select the same population. Set false to keep traces untouched even in an application that traces."
+    },
+    {
       "name": "idempotency.caffeine.maximum-size",
       "description": "Maximum entries the Caffeine store holds. Records normally leave by TTL; this is the backstop for when new keys arrive faster than old ones expire, so memory stays bounded. Least-recently-used entries are evicted first."
     },

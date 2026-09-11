@@ -105,6 +105,7 @@ public class IdempotencyProperties {
     private final Caffeine caffeine = new Caffeine();
 
     private final Metrics metrics = new Metrics();
+    private final Tracing tracing = new Tracing();
     private final Filter filter = new Filter();
 
     public boolean isEnabled() {
@@ -269,6 +270,10 @@ public class IdempotencyProperties {
 
     public Metrics getMetrics() {
         return metrics;
+    }
+
+    public Tracing getTracing() {
+        return tracing;
     }
 
     public Jdbc getJdbc() {
@@ -441,6 +446,25 @@ public class IdempotencyProperties {
          * Publish idempotency counters to Micrometer when a MeterRegistry is present. Set false to
          * keep the no-op implementation even in an application that has a registry - for instance
          * where cardinality budgets are tight and these counters are not wanted.
+         */
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+    }
+
+    public static class Tracing {
+
+        /**
+         * Tag the request's trace span with what @Idempotent did, when the application has a
+         * Micrometer Tracer. Set false to leave traces untouched - for instance where span
+         * attributes are billed per byte, or where an operator would rather not have the fact
+         * that a request was a replay visible to everyone who can read a trace.
          */
         private boolean enabled = true;
 

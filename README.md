@@ -162,6 +162,7 @@ a silent execution of the wrong payload.
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
 | `idempotency.jdbc.on-silent-rollback` | `return_response` | What a caller gets when a handler marks the shared transaction rollback-only and then returns success. `return_response` sends what the handler returned; `fail` returns 500, because the response describes data that was never committed. Only reachable with `join-transaction=true` |
 | `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
+| `idempotency.tracing.enabled` | `true` | Tag the request's span with `idempotency.outcome` when a Micrometer Tracing `Tracer` exists. No effect without one |
 
 ## The two TTLs
 
@@ -402,6 +403,35 @@ sum(rate(idempotency_requests_total{outcome="replayed"}[5m]))
 
 Set `idempotency.metrics.enabled=false` to keep the no-op implementation, or register your own
 `IdempotencyMetrics` bean to route the same events somewhere else - the starter backs off from both.
+
+## Tracing
+
+A replay is the most confusing span in a distributed trace. The endpoint was called, it returned
+`201`, it opened no transaction, issued no query, made no downstream call, and took two
+milliseconds. That reads as a handler that silently did nothing.
+
+If your application has a Micrometer Tracing `Tracer` — `spring-boot-starter-actuator` plus a
+bridge such as `micrometer-tracing-bridge-otel` or `-brave` — the starter tags the **request's own
+span** with what it did:
+
+```
+idempotency.outcome = replayed
+```
+
+The values are exactly the `outcome` tag values in the table above, so a Prometheus rate and a
+trace-search filter select the same population.
+
+The tag goes on the existing server span rather than in a child span of its own. A child span would
+put the answer one level down from where you are already looking, add a span to every request in
+the system to carry a single string, and still leave the trace list inexplicable to anyone scanning
+it. Nothing is added when the request is not sampled.
+
+Set `idempotency.tracing.enabled=false` to leave traces untouched, or register your own
+`IdempotencyTracer` bean to send the outcome somewhere else — an OpenTelemetry attribute, an MDC
+entry, an audit trail. The starter backs off from both. This works in all three execution paths
+(aspect, filter mode and WebFlux); on WebFlux it relies on Reactor context propagation, which Spring
+Boot enables when tracing is configured.
+
 ## WebFlux
 
 Add `idempotency-webflux` and `@Idempotent` works on reactive handlers that return `Mono`:
@@ -530,7 +560,8 @@ IdempotencyStore idempotencyStore(/* ... */) {
 ```
 
 Other extension points: `ScopeResolver` (custom key namespacing), `IdempotencyMetrics` (wire up
-Micrometer or anything else), and `IdempotencyObjectMapperCustomizer` (register your application's
+Micrometer or anything else), `IdempotencyTracer` (send the per-request outcome to your own tracing
+or audit sink), and `IdempotencyObjectMapperCustomizer` (register your application's
 Jackson modules on the starter's internal payload mapper — it deliberately never reuses your
 app's own `ObjectMapper`).
 

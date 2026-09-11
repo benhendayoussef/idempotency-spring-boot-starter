@@ -18,6 +18,8 @@ dependencies {
     compileOnly("org.springframework:spring-jdbc")
     // Optional: metrics are wired only when the application already has a MeterRegistry.
     compileOnly("io.micrometer:micrometer-core")
+    // Optional: tracing is wired only when the application already has a Tracer.
+    compileOnly("io.micrometer:micrometer-tracing")
     // For HandlerMapping, referenced when wiring the filter-mode bean. Servlet MVC is
     // always present at runtime under @ConditionalOnWebApplication(SERVLET), so compileOnly.
     compileOnly("org.springframework:spring-webmvc")
@@ -28,6 +30,10 @@ dependencies {
     testImplementation(project(":idempotency-store-redis"))
     testImplementation(project(":idempotency-store-jdbc"))
     testImplementation("io.micrometer:micrometer-core")
+    testImplementation("io.micrometer:micrometer-tracing")
+    // SimpleTracer records spans and their tags in memory - a real Tracer implementation with no
+    // exporter, collector or OTel/Brave bridge to stand up just to assert one tag.
+    testImplementation("io.micrometer:micrometer-tracing-test")
     testImplementation(project(":idempotency-store-caffeine"))
     testImplementation(project(":idempotency-webflux"))
     testImplementation("org.springframework.boot:spring-boot-starter-webflux")
