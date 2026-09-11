@@ -27,8 +27,8 @@ replayed** — not a re-execution, not an error.
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.4.0")
 }
 ```
 
@@ -54,8 +54,8 @@ The JDBC store needs more setup than swapping one dependency — all of the foll
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-jdbc:0.4.0")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     runtimeOnly("org.postgresql:postgresql")
 }
@@ -89,8 +89,8 @@ acceptable:
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
-    implementation("io.github.benhendayoussef:idempotency-store-caffeine:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0")
+    implementation("io.github.benhendayoussef:idempotency-store-caffeine:0.4.0")
 }
 ```
 
@@ -438,9 +438,9 @@ Add `idempotency-webflux` and `@Idempotent` works on reactive handlers that retu
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.3.0")
-    implementation("io.github.benhendayoussef:idempotency-webflux:0.3.0")
-    implementation("io.github.benhendayoussef:idempotency-store-redis:0.3.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:0.4.0")
+    implementation("io.github.benhendayoussef:idempotency-webflux:0.4.0")
+    implementation("io.github.benhendayoussef:idempotency-store-redis:0.4.0")
 }
 ```
 
@@ -464,7 +464,7 @@ Three things to know before adopting it:
   passes through untouched, with a WARN at startup rather than silent half-support.
 - **Stores are still blocking**, so store calls are scheduled onto `boundedElastic`. Correct, but an
   idempotent endpoint costs two thread handoffs a plain one does not. A reactive store SPI (R2DBC,
-  reactive Redis) would remove that and is not in 0.3.0.
+  reactive Redis) would remove that and is not in 0.4.0.
 - **`idempotency.scope` must be `global`.** `user` and `tenant` resolve the principal from
   `SecurityContextHolder`, which is a ThreadLocal with no meaning on a reactive stack. Rather than
   quietly falling back to global - which would share idempotency keys across users - startup fails
@@ -569,6 +569,7 @@ app's own `ObjectMapper`).
 
 | Starter version | Spring Boot | Java |
 |---|---|---|
+| 0.4.x | **3.5.x and 4.1.x** | 17+ |
 | 0.3.x | **3.5.x and 4.1.x** | 17+ |
 | 0.2.x | 4.1.x (Spring Framework 7) | 17+ |
 | 0.1.x | 4.1.x (Spring Framework 7) | 17+ |
