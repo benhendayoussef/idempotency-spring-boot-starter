@@ -99,6 +99,10 @@
     {
       "name": "idempotency.claim-ttl",
       "description": "How long a claim may be held before the holder is presumed dead and the key becomes reclaimable. Distinct from default-ttl, which is how long a completed response stays replayable. Must be longer than your slowest handler: if a claim expires while the request is still running, a concurrent duplicate reclaims the key and both execute. Capped at the retention TTL in effect for the request."
+    },
+    {
+      "name": "idempotency.jdbc.on-silent-rollback",
+      "description": "What a caller gets when a handler marks the shared transaction rollback-only and then returns success. RETURN_RESPONSE reports what the handler returned (the behaviour through 0.4); FAIL returns a 500, on the grounds that the response describes data that was never committed. Only reachable with join-transaction=true."
     }
   ],
   "hints": [
@@ -231,6 +235,19 @@
         {
           "value": "filter",
           "description": "Byte-exact replay of the real HTTP response. No argument fingerprinting."
+        }
+      ]
+    },
+    {
+      "name": "idempotency.jdbc.on-silent-rollback",
+      "values": [
+        {
+          "value": "return_response",
+          "description": "Return what the handler returned. Default, and the behaviour through 0.4."
+        },
+        {
+          "value": "fail",
+          "description": "Return 500 - the response would describe data that does not exist."
         }
       ]
     }

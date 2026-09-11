@@ -160,6 +160,7 @@ a silent execution of the wrong payload.
 | `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
 | `idempotency.jdbc.sweeper-interval` | `15m` | |
 | `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
+| `idempotency.jdbc.on-silent-rollback` | `return_response` | What a caller gets when a handler marks the shared transaction rollback-only and then returns success. `return_response` sends what the handler returned; `fail` returns 500, because the response describes data that was never committed. Only reachable with `join-transaction=true` |
 | `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
 
 ## The two TTLs
@@ -260,6 +261,13 @@ transactional ones:
   The 4xx record is written after the rollback in its own transaction, so a retry gets the same
   deterministic client error — but the business data that error described is gone. Don't build a 4xx
   body out of rows written in the same request.
+- **A handler that calls `setRollbackOnly()` and then returns a success status is ambiguous**, and
+  you choose which half to believe with `idempotency.jdbc.on-silent-rollback`. The default,
+  `return_response`, sends what the handler returned — the behaviour in every release so far. Set it
+  to `fail` and the caller gets a 500 instead, on the grounds that a `201 Created` describing a row
+  that rolled back is worse than an error. Either way the key is released, so a retry re-executes.
+  Only reachable in joined mode: without it the handler rolls back its own transaction and the
+  library never hears about it.
 - **Replays still open zero transactions.** The aspect answers from the store without calling
   `proceed()`, so the transaction manager is never touched — the whole reason for the aspect
   ordering, and asserted directly in the test suite.

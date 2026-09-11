@@ -28,6 +28,12 @@ All notable changes to this project are documented in this file.
   a claim stuck `IN_PROGRESS`. Reports the stored payload’s size rather than its content, and stays
   unreachable until explicitly exposed, since evicting a key defeats idempotency for a named
   request.
+- `idempotency.jdbc.on-silent-rollback` - what a caller gets when a handler marks the shared
+  transaction rollback-only and then returns a success status. The default, `return_response`,
+  sends what the handler returned and keeps the behaviour of every release so far; `fail` returns
+  500 instead, on the grounds that a `201 Created` describing a row that rolled back misleads the
+  caller. The key is released either way, so a retry re-executes. Open since 0.2, where the choice
+  was made silently; only reachable with `join-transaction=true`.
 - Every `internal` package now declares that it is not supported API, guarded by a test.
   `store/caffeine/internal`, `webflux/internal` and `internal/filter` shipped in 0.3 without one -
   the last because Java does not inherit `package-info` into subpackages.

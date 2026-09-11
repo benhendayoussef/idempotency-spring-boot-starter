@@ -17,6 +17,7 @@ import io.github.benhendayoussef.idempotency.api.IdempotencyStore.ClaimResult;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStoreUnavailableException;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
+import io.github.benhendayoussef.idempotency.config.IdempotencyProperties.OnSilentRollback;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties.OnStoreFailure;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties.ReleaseOn;
 import jakarta.servlet.http.HttpServletRequest;
@@ -243,13 +244,22 @@ public class IdempotencyAspect implements Ordered {
                 // outcome. Release the claim so the key is immediately reclaimable rather than
                 // stranded as IN_PROGRESS until its TTL expires.
                 //
-                // The handler's result is still returned: it chose to roll back and chose to
-                // return success, and v0.1 surfaced that same response. Changing it to a 500 is a
-                // separate decision, not this property's job.
+                // Either way the claim is released - nothing was committed, so the key must not stay
+                // held. What differs is what the caller is told, which is idempotency.jdbc.
+                // on-silent-rollback.
                 releaseQuietly(storeKey);
                 metrics.released();
                 log.warn("Handler for idempotency key {} marked the transaction rollback-only; "
                         + "nothing was committed and the key has been released", storeKey);
+
+                if (props.getJdbc().getOnSilentRollback() == OnSilentRollback.FAIL) {
+                    // The response would describe data that does not exist. Surfacing the rollback
+                    // is the point, so the original exception propagates rather than a synthetic
+                    // one - it names the transaction that rolled back.
+                    throw t;
+                }
+                // Default: the handler made two explicit choices - roll back, and report success -
+                // and the library reports the one it returned. This is what 0.1 through 0.4 did.
                 return handlerResult[0];
             }
 

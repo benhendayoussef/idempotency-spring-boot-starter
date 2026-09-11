@@ -304,6 +304,8 @@ public class IdempotencyProperties {
     public enum Dialect { AUTO, POSTGRES, MYSQL }
     public enum Mode { ASPECT, FILTER }
 
+    public enum OnSilentRollback { RETURN_RESPONSE, FAIL }
+
     public static class Filter {
 
         /**
@@ -362,6 +364,21 @@ public class IdempotencyProperties {
         private boolean joinTransaction = false;
 
         /**
+         * What a caller gets when a handler marks the shared transaction rollback-only and then
+         * returns a success response.
+         *
+         * <p>Nothing was committed, but the handler chose to report success - so the caller is told
+         * "Created" about data that does not exist. Only reachable with
+         * {@code join-transaction=true}, since without joining the handler rolls back its own
+         * transaction and the library never learns about it.
+         *
+         * <p>Defaults to {@code RETURN_RESPONSE}, which is what 0.1 through 0.4 did: the handler
+         * made two explicit choices and the library reports the one it returned. Teams who consider
+         * that a lie to the caller can set {@code FAIL} and get a 500 instead.
+         */
+        private OnSilentRollback onSilentRollback = OnSilentRollback.RETURN_RESPONSE;
+
+        /**
          * Which SQL dialect the store speaks. AUTO asks the DataSource what it is connected to at
          * startup, which is right almost always; set it explicitly for a database that reports a
          * product name AUTO does not recognise, or to fail fast on a misconfigured DataSource
@@ -399,6 +416,14 @@ public class IdempotencyProperties {
 
         public void setDialect(Dialect dialect) {
             this.dialect = dialect;
+        }
+
+        public OnSilentRollback getOnSilentRollback() {
+            return onSilentRollback;
+        }
+
+        public void setOnSilentRollback(OnSilentRollback onSilentRollback) {
+            this.onSilentRollback = onSilentRollback;
         }
 
         public boolean isJoinTransaction() {
