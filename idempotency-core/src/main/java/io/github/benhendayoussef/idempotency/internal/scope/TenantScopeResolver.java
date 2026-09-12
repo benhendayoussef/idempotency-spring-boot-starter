@@ -1,8 +1,9 @@
 package io.github.benhendayoussef.idempotency.internal.scope;
 
+import io.github.benhendayoussef.idempotency.api.IdempotencyContext;
 import io.github.benhendayoussef.idempotency.api.IdempotencyScope;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
-import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 
 /**
@@ -24,10 +25,9 @@ public class TenantScopeResolver implements ScopeResolver {
     }
 
     @Override
-    public String namespace() {
-        Object principal = SecurityContextHolder.getContext().getAuthentication() == null
-                ? null
-                : SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+    public String namespace(IdempotencyContext context) {
+        Object auth = context.authentication().orElse(null);
+        Object principal = auth instanceof Authentication authentication ? authentication.getPrincipal() : null;
         if (!(principal instanceof Jwt jwt)) {
             throw new IllegalStateException("No JWT principal for TENANT-scoped idempotency key");
         }

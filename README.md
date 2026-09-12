@@ -559,11 +559,73 @@ IdempotencyStore idempotencyStore(/* ... */) {
 }
 ```
 
-Other extension points: `ScopeResolver` (custom key namespacing), `IdempotencyMetrics` (wire up
-Micrometer or anything else), `IdempotencyTracer` (send the per-request outcome to your own tracing
-or audit sink), and `IdempotencyObjectMapperCustomizer` (register your application's
-Jackson modules on the starter's internal payload mapper — it deliberately never reuses your
-app's own `ObjectMapper`).
+`ScopeResolver` decides the namespace that keeps one caller's key from colliding with another's.
+Everything it needs arrives in the `IdempotencyContext` — it never reads ambient state, which is
+what lets the same resolver work on any stack:
+
+```java
+@Bean
+ScopeResolver apiKeyScopeResolver() {
+    return new ScopeResolver() {
+        @Override public IdempotencyScope supports() { return IdempotencyScope.CUSTOM; }
+
+        @Override public String namespace(IdempotencyContext context) {
+            Object auth = context.authentication().orElse(null);
+            if (!(auth instanceof MyToken token)) {
+                // IllegalStateException specifically: it routes through
+                // idempotency.on-missing-principal instead of reaching the caller as a 500.
+                throw new IllegalStateException("no API key on this request");
+            }
+            return token.accountId();
+        }
+    };
+}
+```
+
+Other extension points: `IdempotencyMetrics` (wire up Micrometer or anything else),
+`IdempotencyTracer` (send the per-request outcome to your own tracing or audit sink), and
+`IdempotencyObjectMapperCustomizer` (register your application's Jackson modules on the starter's
+internal payload mapper — it deliberately never reuses your app's own `ObjectMapper`).
+
+## API stability
+
+From **1.0.0** this project follows [semantic versioning](https://semver.org), and the point of the
+1.0 line is that the list below is a promise rather than an intention.
+
+**Covered — a breaking change here requires a new major version:**
+
+| | |
+|---|---|
+| `io.github.benhendayoussef.idempotency.api.**` | `@Idempotent` and its attributes, `IdempotencyStore`, `ScopeResolver`, `IdempotencyContext`, `IdempotencyRecord`, `IdempotencyMetrics`, `IdempotencyTracer`, `IdempotencyKeys`, the enums and the exception types |
+| Configuration property names and meanings | Every `idempotency.*` key, its default, and what it does |
+| **The storage key format** | The hash of namespace, method, route and client key. Changing it would orphan every record already in your store |
+| **The stored record format** | A record written by 1.x stays readable by every later 1.x, so a rolling upgrade never strands in-flight keys |
+| The actuator endpoint | Its id, parameters and response fields |
+| Metric and trace names | `idempotency.requests`, its `outcome` tag values, and the `idempotency.outcome` span tag. Values may be *added*; existing ones will not change meaning |
+| Autoconfiguration class names | People name these in `spring.autoconfigure.exclude`, so the names are API even though their `@Bean` methods are not |
+
+**Not covered — these change in any release:**
+
+- **Every `internal` package, in every module.** Each one says so in its own `package-info.java`,
+  and a test enforces that they all do. If you are importing from one, you are outside the
+  supported API — open an issue and say what you needed, because that is a gap worth closing
+  properly.
+- The `@Bean` method signatures inside the autoconfiguration classes.
+- Log message wording.
+- Anything marked `@Deprecated(forRemoval = true)`, after the removal window below.
+
+**Deprecation.** Anything being removed is deprecated in a minor release first, with
+`@Deprecated(since = "1.x", forRemoval = true)` and a javadoc pointer to the replacement. It stays
+for the remainder of the major version — a minor release never removes covered API.
+
+**Spring Boot.** Both supported generations are exercised by the full test suite in CI on every
+push, and dropping one is a major-version change. Java 17 stays the baseline for all of 1.x.
+
+**Adding to an interface.** `IdempotencyMetrics` and `IdempotencyContext` are designed so they can
+grow: every method on them has, or can be given, a default body. New outcomes and new context
+accessors will arrive in minor releases without breaking implementors. `IdempotencyRecord` is a
+record and therefore cannot gain components — if its shape ever has to change, that is a new type,
+not a modified one.
 
 ## Compatibility matrix
 

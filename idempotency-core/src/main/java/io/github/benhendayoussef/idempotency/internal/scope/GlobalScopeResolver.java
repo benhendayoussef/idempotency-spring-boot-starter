@@ -1,5 +1,6 @@
 package io.github.benhendayoussef.idempotency.internal.scope;
 
+import io.github.benhendayoussef.idempotency.api.IdempotencyContext;
 import io.github.benhendayoussef.idempotency.api.IdempotencyScope;
 import io.github.benhendayoussef.idempotency.api.ScopeResolver;
 
@@ -12,7 +13,7 @@ public class GlobalScopeResolver implements ScopeResolver {
     }
 
     @Override
-    public String namespace() {
+    public String namespace(IdempotencyContext context) {
         return "";
     }
 }

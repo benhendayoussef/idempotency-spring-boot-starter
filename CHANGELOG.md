@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking: `ScopeResolver.namespace()` now takes an `IdempotencyContext`.** It previously took
+  no arguments and implementations read `SecurityContextHolder` directly. That single decision is
+  why `idempotency.scope` has always been restricted to `global` on WebFlux - the ThreadLocal is
+  empty on a reactive stack, and falling back to global silently would have shared idempotency keys
+  across users. Handing the resolver its inputs makes the SPI stack-agnostic and testable without
+  standing up a security context, and means reactive scoping can be added later as a purely
+  additive change rather than a second parallel SPI.
+
+  **Migration.** Only affects `idempotency.scope=custom`, or an application that registered its own
+  bean to override a built-in resolver. Add the parameter and take the authentication from the
+  context instead of the ThreadLocal:
+
+  ```java
+  // before
+  public String namespace() {
+      Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+      return auth.getName();
+  }
+
+  // after
+  public String namespace(IdempotencyContext context) {
+      Object auth = context.authentication().orElse(null);
+      if (!(auth instanceof Authentication authentication)) {
+          throw new IllegalStateException("no principal");   // routed through on-missing-principal
+      }
+      return authentication.getName();
+  }
+  ```
+
+  `IdempotencyContext` also carries `clientKey()`, `httpMethod()` and `routePattern()`, none of
+  which a resolver could see before. It is an interface rather than a record specifically so it can
+  gain accessors in a minor release without breaking implementors.
+
 ## [0.4.0] - 2026-09-11
 
 ### Fixed

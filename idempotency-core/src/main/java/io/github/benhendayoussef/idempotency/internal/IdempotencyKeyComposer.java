@@ -13,9 +13,19 @@ import org.springframework.web.servlet.HandlerMapping;
 public class IdempotencyKeyComposer {
 
     public String compose(String clientKey, String namespace, HttpServletRequest request) {
-        String route = Objects.toString(
+        return IdempotencyKeys.storageKey(clientKey, request.getMethod(), routePattern(request), namespace);
+    }
+
+    /**
+     * The matched route pattern, falling back to the URI when nothing matched.
+     *
+     * <p>Static and shared because the scope context reports the same value to resolvers that the
+     * key is built from. Two definitions of "which route is this" that drifted apart would namespace
+     * a key by one route and store it under another.
+     */
+    public static String routePattern(HttpServletRequest request) {
+        return Objects.toString(
                 request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE),
                 request.getRequestURI());
-        return IdempotencyKeys.storageKey(clientKey, request.getMethod(), route, namespace);
     }
 }
