@@ -2,7 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [1.0.0] - 2026-09-12
+
+**The API is now stable.** Everything in `io.github.benhendayoussef.idempotency.api`, every
+`idempotency.*` property name and meaning, the storage key format, the stored record format, the
+actuator endpoint, and the metric and trace names are covered by semantic versioning from here:
+breaking any of them requires a 2.0. The README's **API stability** section is the full list,
+including what is deliberately *not* covered - every `internal` package, in every module.
+
+No new features. 1.0 is a commitment, not a feature release; the one behavioural change below is
+an API fix made now precisely because it could not be made later.
 
 ### Changed
 
@@ -38,6 +47,24 @@ All notable changes to this project are documented in this file.
   `IdempotencyContext` also carries `clientKey()`, `httpMethod()` and `routePattern()`, none of
   which a resolver could see before. It is an interface rather than a record specifically so it can
   gain accessors in a minor release without breaking implementors.
+
+### Added
+
+- A published **API stability policy** (README), saying exactly what semantic versioning covers
+  here. Two entries are unusual enough to call out: the **storage key format** and the **stored
+  record format**. Changing either would orphan records already in your store or strand in-flight
+  keys during a rolling upgrade, so both are treated as API even though neither is a Java type.
+- `SECURITY.md`, with private vulnerability reporting and - more usefully - what actually counts as
+  a vulnerability in a library like this one. Cross-caller replay and key collision are the real
+  threat classes; a replay to the same caller with the same key is the product working.
+
+### Internal
+
+- A `testNoSpringSecurity` task runs part of the suite with the Spring Security jars genuinely
+  removed from the classpath. `idempotency-core` compiles against Spring Security but must never
+  link to it for a `scope=global` application, and that failure would be a `NoClassDefFoundError`
+  on the first request rather than at startup - invisible to every context test. Runs in CI on both
+  Boot generations.
 
 ## [0.4.0] - 2026-09-11
 
