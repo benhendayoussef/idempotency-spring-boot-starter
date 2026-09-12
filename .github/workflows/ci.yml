@@ -41,6 +41,13 @@ jobs:
       - name: Build and test
         run: ./gradlew -PspringBootVersion=${{ matrix.spring-boot }} clean build
 
+      # idempotency-core compiles against Spring Security but must never link to it in an
+      # application that only uses idempotency.scope=global. That failure is a NoClassDefFoundError
+      # on the first request rather than at startup, so no context test catches it - this task runs
+      # the check on a classpath with the Spring Security jars genuinely removed.
+      - name: compileOnly boundary check (no Spring Security)
+        run: ./gradlew -PspringBootVersion=${{ matrix.spring-boot }} :idempotency-spring-boot-starter:testNoSpringSecurity
+
       # Virtual threads don't exist on the project's pinned Java 17 toolchain; this task runs the
       # same test sources on a separately-provisioned JDK 21+ launcher without changing what the
       # library is normally built and tested against.

@@ -80,6 +80,10 @@ tasks.test {
     // real embedded server + a JDK 21+ runtime to be meaningful at all, so it runs only via the
     // dedicated testVirtualThreads task below, on its own separate launcher.
     exclude("**/VirtualThreadsTest.class")
+    // Runs under testNoSpringSecurity instead. Here the Spring Security jars are present, so its
+    // assertions would hold whether or not the library touched them - and its guard test, which
+    // asserts the classes are absent, would fail.
+    exclude("**/NoSpringSecurityRequestTest.class")
 }
 
 // Virtual-threads check: runs the same test sources but on a JDK 21+ launcher, without changing
@@ -96,4 +100,23 @@ tasks.register<Test>("testVirtualThreads") {
     javaLauncher.set(javaToolchains.launcherFor {
         languageVersion.set(JavaLanguageVersion.of(21))
     })
+}
+
+// The compileOnly boundary check. idempotency-core compiles against Spring Security but must never
+// link to it in an application that only uses idempotency.scope=global - and that failure mode is a
+// NoClassDefFoundError on the first request, not at startup, so a context test cannot catch it.
+//
+// It needs a genuinely smaller classpath rather than a FilteredClassLoader. FilteredClassLoader gates
+// the name lookups behind @ConditionalOnClass but does not stop runtime linkage in classes the
+// application class loader already defined, so a test using it passed even with the aspect calling
+// into Spring Security on every single request. Removing the jars is the only thing that tests this.
+tasks.register<Test>("testNoSpringSecurity") {
+    group = "verification"
+    description = "Runs NoSpringSecurityRequestTest with the Spring Security jars off the classpath."
+    testClassesDirs = tasks.test.get().testClassesDirs
+    classpath = tasks.test.get().classpath.filter { jar ->
+        !jar.name.startsWith("spring-security-") && !jar.name.startsWith("spring-boot-starter-security-")
+    }
+    useJUnitPlatform()
+    include("**/NoSpringSecurityRequestTest.class")
 }

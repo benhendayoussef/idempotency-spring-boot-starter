@@ -7,6 +7,7 @@ import io.github.benhendayoussef.idempotency.api.FingerprintMismatchException;
 import io.github.benhendayoussef.idempotency.api.Idempotent;
 import io.github.benhendayoussef.idempotency.api.IdempotencyConflictException;
 import io.github.benhendayoussef.idempotency.api.IdempotencyKeyRequiredException;
+import io.github.benhendayoussef.idempotency.api.IdempotencyContext;
 import io.github.benhendayoussef.idempotency.api.IdempotencyMetrics;
 import io.github.benhendayoussef.idempotency.api.IdempotencyPrincipalRequiredException;
 import io.github.benhendayoussef.idempotency.api.IdempotencyRecord;
@@ -122,7 +123,7 @@ public class IdempotencyAspect implements Ordered {
         Duration ttl = resolveTtl(idempotent);
         String namespace;
         try {
-            namespace = resolveNamespace(idempotent);
+            namespace = resolveNamespace(idempotent, clientKey, request);
         } catch (MissingPrincipalException e) {
             switch (props.getOnMissingPrincipal()) {
                 case SKIP -> {
@@ -448,7 +449,7 @@ public class IdempotencyAspect implements Ordered {
         return Duration.parse(trimmed); // ISO-8601, e.g. PT30M
     }
 
-    private String resolveNamespace(Idempotent ann) {
+    private String resolveNamespace(Idempotent ann, String clientKey, HttpServletRequest request) {
         IdempotencyScope scope = ann.scope() == IdempotencyScope.DEFAULT ? props.getScope() : ann.scope();
         if (scope == IdempotencyScope.GLOBAL) {
             return "";
@@ -458,8 +459,14 @@ public class IdempotencyAspect implements Ordered {
             throw new IllegalStateException(
                     "No ScopeResolver registered for scope " + scope + " - register a bean implementing ScopeResolver");
         }
+        // Built only here, inside the non-GLOBAL branch. RequestIdempotencyContext resolves the
+        // authentication lazily, so CurrentAuthentication - and with it Spring Security, which is
+        // compileOnly for this module - is never loaded by an application that only uses global keys.
+        IdempotencyContext context = new RequestIdempotencyContext(
+                clientKey, request.getMethod(), IdempotencyKeyComposer.routePattern(request),
+                CurrentAuthentication::get);
         try {
-            return resolver.namespace();
+            return resolver.namespace(context);
         } catch (IllegalStateException e) {
             // The resolver itself is registered (a wiring/config problem, handled above) but this
             // specific request has no resolvable principal - a per-request condition, not a
