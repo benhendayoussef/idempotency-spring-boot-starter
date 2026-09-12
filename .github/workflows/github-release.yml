@@ -1,0 +1,71 @@
+name: GitHub Release
+
+# Creates the GitHub Release page for a tag, with notes taken straight from CHANGELOG.md so the
+# release and the changelog can never drift apart.
+#
+# Deliberately separate from release.yml. That one publishes to Maven Central and must run exactly
+# once per version - re-running it for an already-published version would upload a duplicate
+# deployment and burn a monthly publishing slot. This one only writes a page on GitHub and is safe
+# to re-run, which is what makes the manual trigger below usable for backfilling old tags.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to create the release for, e.g. v0.4.0'
+        required: true
+
+# The only permission this needs, and the reason it needs no personal token: GITHUB_TOKEN is minted
+# for the run by GitHub itself.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the tag
+        run: echo "TAG=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Extract the changelog section for this version
+        run: |
+          VERSION="${TAG#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # Everything between this version's heading and the next one.
+          #
+          # index() rather than a regex on purpose. Building the pattern as "^## \\[" v "\\]" looks
+          # right and is not: awk strips the backslashes at the string level, so the version lands in
+          # the regex as [0.4.0] - a character class matching one of '0', '.' or '4' - and the whole
+          # extraction silently yields nothing. index() needs no escaping and behaves identically
+          # across gawk, mawk and busybox awk, which is what runners actually vary in.
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1     { found = 1; next }
+            found && index($0, "## [") == 1  { exit }
+            found                            { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          # A release whose notes are silently empty is worse than a failed workflow: nobody notices
+          # until someone opens the page.
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::No '## [$VERSION]' section found in CHANGELOG.md" >&2
+            exit 1
+          fi
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; updating its notes rather than failing."
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" \
+              --title "$VERSION" \
+              --notes-file RELEASE_NOTES.md \
+              --verify-tag
+          fi
