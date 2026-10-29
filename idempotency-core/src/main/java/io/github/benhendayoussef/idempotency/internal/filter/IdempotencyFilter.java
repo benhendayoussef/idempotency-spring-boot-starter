@@ -65,6 +65,9 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
     /** Distinguishes a raw captured response from an aspect-mode serialized return value. */
     public static final String RAW_PAYLOAD_TYPE = "!raw";
 
+    /** Stored in place of a fingerprint, which filter mode does not compute. */
+    static final String NO_FINGERPRINT = "-";
+
     private final IdempotencyStore store;
     private final IdempotencyProperties props;
     private final ObjectMapper payloadMapper;
@@ -119,7 +122,8 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
         // which do not exist yet out here. The request body would be the equivalent, and reading it
         // in a filter means buffering every request - a real cost imposed on every endpoint to serve
         // one. Documented as a difference between the modes rather than silently approximated.
-        String fingerprint = "";
+        // Not empty: Oracle stores '' as NULL, which the NOT NULL fingerprint column rejects.
+        String fingerprint = NO_FINGERPRINT;
 
         ClaimResult claim;
         try {
@@ -160,7 +164,7 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
                     log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached",
                             storeKey);
                 } else {
-                    store.complete(storeKey, new IdempotencyRecord(State.COMPLETED, "", captured.status(),
+                    store.complete(storeKey, new IdempotencyRecord(State.COMPLETED, NO_FINGERPRINT, captured.status(),
                             RAW_PAYLOAD_TYPE, json, Instant.now()), ttl);
                 }
                 metrics.executed();
@@ -222,6 +226,16 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
     /** Writes the stored response back exactly as it was sent, headers and bytes included. */
     private void writeReplay(HttpServletResponse response, IdempotencyRecord record, boolean afterWait)
             throws IOException {
+        if (!RAW_PAYLOAD_TYPE.equals(record.payloadType())) {
+            // Written by aspect mode (a serialized return value, not a captured response), e.g. before
+            // the mode was switched. It cannot be replayed byte for byte, and re-executing would
+            // defeat the point of the key, so refuse rather than fail with a deserialization error.
+            log.warn("Idempotency record has payload type '{}', not written by filter mode; "
+                    + "cannot replay it after switching idempotency.mode", record.payloadType());
+            response.sendError(HttpServletResponse.SC_CONFLICT,
+                    "This idempotency key was used before idempotency.mode changed and cannot be replayed");
+            return;
+        }
         CapturedResponse captured = payloadMapper.readValue(record.payload(), CapturedResponse.class);
         response.setStatus(captured.status());
         captured.headers().forEach((name, values) -> values.forEach(v -> response.addHeader(name, v)));
