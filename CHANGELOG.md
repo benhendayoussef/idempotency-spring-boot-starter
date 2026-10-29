@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.1] - 2026-10-29
+
+### Fixed
+
+- **`idempotency.mode=filter` no longer inserts an empty fingerprint.** Oracle stores `''` as
+  `NULL`, so the `NOT NULL` fingerprint column rejected every claim (`ORA-01400`). Filter mode now
+  stores the placeholder `-`, which needs no schema change on any database.
+- **Filter mode no longer fails to deserialize records written by aspect mode.** After switching
+  `idempotency.mode` from `aspect` to `filter`, replaying an old key threw a Jackson error. Such a
+  key is now answered with `409 Conflict` and a clear message; it is never re-executed.
+
 ## [1.0.0] - 2026-09-12
 
 **The API is now stable.** Everything in `io.github.benhendayoussef.idempotency.api`, every

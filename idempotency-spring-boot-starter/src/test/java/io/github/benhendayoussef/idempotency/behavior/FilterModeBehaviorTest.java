@@ -6,11 +6,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import io.github.benhendayoussef.idempotency.api.Idempotent;
+import io.github.benhendayoussef.idempotency.api.IdempotencyRecord;
+import io.github.benhendayoussef.idempotency.api.IdempotencyRecord.State;
+import io.github.benhendayoussef.idempotency.api.IdempotencyKeys;
+import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import io.github.benhendayoussef.idempotency.internal.IdempotencyAspect;
 import io.github.benhendayoussef.idempotency.internal.filter.IdempotencyFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,6 +59,9 @@ class FilterModeBehaviorTest {
 
     @Autowired
     private ApplicationContext context;
+
+    @Autowired
+    private IdempotencyStore store;
 
     @BeforeEach
     void reset() {
@@ -203,6 +212,26 @@ class FilterModeBehaviorTest {
                 .andExpect(status().isCreated());
 
         assertThat(controller.createdCount()).isEqualTo(2);
+    }
+
+    /**
+     * A record left behind by aspect mode holds a serialized return value, not a captured response.
+     * Replaying it used to fail with a Jackson error; it must be refused cleanly instead.
+     */
+    @Test
+    void aRecordWrittenByAspectModeIsRefusedNotDeserialized() throws Exception {
+        String key = "aspect-" + System.nanoTime();
+        String storeKey = IdempotencyKeys.storageKey(key, "POST", "/f/created", "");
+        store.claim(storeKey, "some-aspect-fingerprint", Duration.ofMinutes(1));
+        store.complete(storeKey, new IdempotencyRecord(State.COMPLETED, "some-aspect-fingerprint", 200,
+                "com.example.MockSignRequest", "{\"name\":\"user field\"}", Instant.now()),
+                Duration.ofMinutes(1));
+
+        mockMvc.perform(post("/f/created").header("Idempotency-Key", key)
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isConflict());
+
+        assertThat(controller.createdCount()).isZero();
     }
 
     @SpringBootConfiguration

@@ -27,8 +27,8 @@ replayed** — not a re-execution, not an error.
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-redis:1.0.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.1") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-redis:1.0.1")
 }
 ```
 
@@ -54,8 +54,8 @@ The JDBC store needs more setup than swapping one dependency — all of the foll
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.0") // use the latest published version
-    implementation("io.github.benhendayoussef:idempotency-store-jdbc:1.0.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.1") // use the latest published version
+    implementation("io.github.benhendayoussef:idempotency-store-jdbc:1.0.1")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     runtimeOnly("org.postgresql:postgresql")
 }
@@ -89,8 +89,8 @@ acceptable:
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.0")
-    implementation("io.github.benhendayoussef:idempotency-store-caffeine:1.0.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.1")
+    implementation("io.github.benhendayoussef:idempotency-store-caffeine:1.0.1")
 }
 ```
 
@@ -438,9 +438,9 @@ Add `idempotency-webflux` and `@Idempotent` works on reactive handlers that retu
 
 ```kotlin
 dependencies {
-    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.0")
-    implementation("io.github.benhendayoussef:idempotency-webflux:1.0.0")
-    implementation("io.github.benhendayoussef:idempotency-store-redis:1.0.0")
+    implementation("io.github.benhendayoussef:idempotency-spring-boot-starter:1.0.1")
+    implementation("io.github.benhendayoussef:idempotency-webflux:1.0.1")
+    implementation("io.github.benhendayoussef:idempotency-store-redis:1.0.1")
 }
 ```
 
