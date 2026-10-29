@@ -2,7 +2,7 @@
 springBoot = "4.1.0"
 springFramework = "7.0.8"
 junit = "5.11.4"
-testcontainers = "1.20.4"
+testcontainers = "1.21.4"
 assertj = "3.27.0"
 mavenPublish = "0.37.0"
 
