@@ -226,6 +226,10 @@
         {
           "value": "mysql",
           "description": "MySQL or MariaDB."
+        },
+        {
+          "value": "oracle",
+          "description": "Oracle."
         }
       ]
     },

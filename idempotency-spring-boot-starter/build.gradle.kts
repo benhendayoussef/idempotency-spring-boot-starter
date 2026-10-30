@@ -55,8 +55,10 @@ dependencies {
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:mysql")
+    testImplementation("org.testcontainers:testcontainers-oracle-free")
     testRuntimeOnly("com.mysql:mysql-connector-j")
     testImplementation("org.postgresql:postgresql")
+    testImplementation("com.oracle.database.jdbc:ojdbc17:23.26.3.0.0")
 }
 
 // spring-configuration-metadata.json is generated where IdempotencyProperties is actually

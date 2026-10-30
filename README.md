@@ -48,7 +48,7 @@ with an `Idempotent-Replay: true` header, and the handler does not execute a sec
 See [`samples/sample-orders-api`](samples/sample-orders-api) for a runnable demo
 (`docker compose up -d && ./gradlew :samples:sample-orders-api:bootRun`, then `./demo.sh`).
 
-## Quickstart (JDBC — Postgres or MySQL)
+## Quickstart (JDBC — Postgres / MySQL / Oracle)
 
 The JDBC store needs more setup than swapping one dependency — all of the following:
 
@@ -79,6 +79,8 @@ For **MySQL or MariaDB**, change three things: the JDBC URL, the driver
 (`runtimeOnly("com.mysql:mysql-connector-j")`), and the schema
 (`classpath:db/idempotency/mysql.sql`). Nothing else — the dialect is detected from the `DataSource`
 on first use, so `idempotency.jdbc.dialect` only needs setting to skip detection.
+
+Similarly for **Oracle**, the schema is (`classpath:db/idempotency/oracle.sql`).
 
 The same `@Idempotent` annotation and `curl` round trip from the Redis quickstart apply unchanged.
 
@@ -134,35 +136,35 @@ a silent execution of the wrong payload.
 
 ## Configuration reference
 
-| Property | Default | Notes |
-|---|---|---|
-| `idempotency.enabled` | `true` | Master switch |
-| `idempotency.mode` | `aspect` | `aspect` | `filter`. See [Replay modes](#replay-modes) below |
-| `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode |
-| `idempotency.store` | `auto` | `auto` \| `redis` \| `jdbc` \| `caffeine` \| `memory` |
-| `idempotency.default-ttl` | `24h` | How long a **completed response** stays replayable. Overridable per-endpoint via `@Idempotent(ttl = "...")` |
-| `idempotency.claim-ttl` | `5m` | How long an **in-flight claim** is held before the holder is presumed dead. Must exceed your slowest handler — [see below](#the-two-ttls) |
-| `idempotency.header-name` | `Idempotency-Key` | Overridable via `@Idempotent(keyHeader = "...")` |
-| `idempotency.require-key` | `false` | `true` rejects keyless requests with 400 instead of passing them through |
-| `idempotency.on-conflict` | `wait` | `wait` polls the in-flight request; `fail_fast` returns 409 immediately |
-| `idempotency.wait-timeout` | `5s` | Max poll time before a `wait` conflict gives up with 409 |
-| `idempotency.scope` | `global` | `global` \| `user` \| `tenant` \| `custom` (register your own `ScopeResolver`). `user` and `tenant` need Spring Security on the classpath; without it, startup fails with an actionable message rather than at request time |
-| `idempotency.tenant-claim` | `tenant_id` | JWT claim read by the built-in TENANT resolver |
-| `idempotency.on-missing-principal` | `global` | What a `user`/`tenant`-scoped request does when it reaches the aspect with no resolvable authenticated principal: `global` falls back to the global namespace; `skip` executes unprotected; `reject` returns 400. Never a raw 500 |
-| `idempotency.on-store-failure` | `proceed` | `proceed` executes unprotected with a WARN; `fail` returns 503 |
-| `idempotency.problem-details` | `true` | Registers the built-in RFC 9457 exception advice |
-| `idempotency.max-payload-size` | `256KB` | Larger responses execute normally but aren't cached for replay |
-| `idempotency.release-on` | `five_xx,timeout` | Outcomes that release instead of complete the key. Note the underscore: Spring's relaxed binding needs `five_xx`, not `5xx` |
-| `idempotency.caffeine.maximum-size` | `10000` | Ceiling on entries held by the Caffeine store; LRU beyond it |
-| `idempotency.redis.key-prefix` | `idempotency:` | |
-| `idempotency.jdbc.table-name` | `idempotency_record` | |
-| `idempotency.jdbc.dialect` | `auto` | `auto` | `postgres` | `mysql`. AUTO detects from the `DataSource` on first use, not at startup |
-| `idempotency.jdbc.sweeper-enabled` | `false` | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage |
-| `idempotency.jdbc.sweeper-interval` | `15m` | |
-| `idempotency.jdbc.join-transaction` | `false` | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
-| `idempotency.jdbc.on-silent-rollback` | `return_response` | What a caller gets when a handler marks the shared transaction rollback-only and then returns success. `return_response` sends what the handler returned; `fail` returns 500, because the response describes data that was never committed. Only reachable with `join-transaction=true` |
-| `idempotency.metrics.enabled` | `true` | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one |
-| `idempotency.tracing.enabled` | `true` | Tag the request's span with `idempotency.outcome` when a Micrometer Tracing `Tracer` exists. No effect without one |
+| Property | Default                                       | Notes                                                                                                                                                                                                                                                                                                                |
+|---|-----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `idempotency.enabled` | `true`                                        | Master switch                                                                                                                                                                                                                                                                                                        |
+| `idempotency.mode` | `aspect`                                      | `aspect`                                                                                                                                                                                                                                                                                                             | `filter`. See [Replay modes](#replay-modes) below |
+| `idempotency.filter.replay-headers` | `Content-Type, Location, ETag, Cache-Control` | Headers replayed verbatim in filter mode                                                                                                                                                                                                                                                                             |
+| `idempotency.store` | `auto`                                        | `auto` \| `redis` \| `jdbc` \| `caffeine` \| `memory`                                                                                                                                                                                                                                                                |
+| `idempotency.default-ttl` | `24h`                                         | How long a **completed response** stays replayable. Overridable per-endpoint via `@Idempotent(ttl = "...")`                                                                                                                                                                                                          |
+| `idempotency.claim-ttl` | `5m`                                          | How long an **in-flight claim** is held before the holder is presumed dead. Must exceed your slowest handler — [see below](#the-two-ttls)                                                                                                                                                                            |
+| `idempotency.header-name` | `Idempotency-Key`                             | Overridable via `@Idempotent(keyHeader = "...")`                                                                                                                                                                                                                                                                     |
+| `idempotency.require-key` | `false`                                       | `true` rejects keyless requests with 400 instead of passing them through                                                                                                                                                                                                                                             |
+| `idempotency.on-conflict` | `wait`                                        | `wait` polls the in-flight request; `fail_fast` returns 409 immediately                                                                                                                                                                                                                                              |
+| `idempotency.wait-timeout` | `5s`                                          | Max poll time before a `wait` conflict gives up with 409                                                                                                                                                                                                                                                             |
+| `idempotency.scope` | `global`                                      | `global` \| `user` \| `tenant` \| `custom` (register your own `ScopeResolver`). `user` and `tenant` need Spring Security on the classpath; without it, startup fails with an actionable message rather than at request time                                                                                          |
+| `idempotency.tenant-claim` | `tenant_id`                                   | JWT claim read by the built-in TENANT resolver                                                                                                                                                                                                                                                                       |
+| `idempotency.on-missing-principal` | `global`                                      | What a `user`/`tenant`-scoped request does when it reaches the aspect with no resolvable authenticated principal: `global` falls back to the global namespace; `skip` executes unprotected; `reject` returns 400. Never a raw 500                                                                                    |
+| `idempotency.on-store-failure` | `proceed`                                     | `proceed` executes unprotected with a WARN; `fail` returns 503                                                                                                                                                                                                                                                       |
+| `idempotency.problem-details` | `true`                                        | Registers the built-in RFC 9457 exception advice                                                                                                                                                                                                                                                                     |
+| `idempotency.max-payload-size` | `256KB`                                       | Larger responses execute normally but aren't cached for replay                                                                                                                                                                                                                                                       |
+| `idempotency.release-on` | `five_xx,timeout`                             | Outcomes that release instead of complete the key. Note the underscore: Spring's relaxed binding needs `five_xx`, not `5xx`                                                                                                                                                                                          |
+| `idempotency.caffeine.maximum-size` | `10000`                                       | Ceiling on entries held by the Caffeine store; LRU beyond it                                                                                                                                                                                                                                                         |
+| `idempotency.redis.key-prefix` | `idempotency:`                                |                                                                                                                                                                                                                                                                                                                      |
+| `idempotency.jdbc.table-name` | `idempotency_record`                          |                                                                                                                                                                                                                                                                                                                      |
+| `idempotency.jdbc.dialect` | `auto`                                        | `auto`                                                                                                                                                                                                                                                                                                               | `postgres` | `mysql` | `oracle` |. AUTO detects from the `DataSource` on first use, not at startup |
+| `idempotency.jdbc.sweeper-enabled` | `false`                                       | The atomic claim already reclaims expired rows on the hot path; this is only for disk usage                                                                                                                                                                                                                          |
+| `idempotency.jdbc.sweeper-interval` | `15m`                                         |                                                                                                                                                                                                                                                                                                                      |
+| `idempotency.jdbc.join-transaction` | `false`                                       | Run the handler and the completion write in one shared transaction — exactly-once instead of at-least-once. Costs: non-`@Transactional` handlers get pulled into a transaction, and a handler's own `@Transactional(timeout)` stops applying. [Read the caveats first](#opt-in-exactly-once-via-transaction-joining) |
+| `idempotency.jdbc.on-silent-rollback` | `return_response`                             | What a caller gets when a handler marks the shared transaction rollback-only and then returns success. `return_response` sends what the handler returned; `fail` returns 500, because the response describes data that was never committed. Only reachable with `join-transaction=true`                              |
+| `idempotency.metrics.enabled` | `true`                                        | Publish counters to Micrometer when a `MeterRegistry` exists. No effect without one                                                                                                                                                                                                                                  |
+| `idempotency.tracing.enabled` | `true`                                        | Tag the request's span with `idempotency.outcome` when a Micrometer Tracing `Tracer` exists. No effect without one                                                                                                                                                                                                   |
 
 ## The two TTLs
 
@@ -189,12 +191,12 @@ never leaves a dead claim sitting for five minutes - and it can never hold a cla
 
 ## Store comparison
 
-| | Redis | JDBC (Postgres / MySQL) |
-|---|---|---|
+| | Redis | JDBC (Postgres / MySQL / Oracle)                                                                                                                       |
+|---|---|--------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Guarantee | **At-least-once.** If the process crashes between the business transaction committing and the completion record being written, the key stays `IN_PROGRESS` until TTL and a retry re-executes. | **At-least-once by default; exactly-once with `idempotency.jdbc.join-transaction=true`.** Both modes are described below — read them before switching. |
-| Speed | Fast — a single round trip per claim. | Slower — shares the datasource and transaction. |
-| Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and the schema for your database applied — see the JDBC quickstart above |
-| Good for | The other 95% of use cases. | Payments and anything else where a replayed side effect is unacceptable, **if you use it the way described below.** |
+| Speed | Fast — a single round trip per claim. | Slower — shares the datasource and transaction.                                                                                                        |
+| Setup | `spring-boot-starter-data-redis` | A `DataSource`, `idempotency.store=jdbc`, and the schema for your database applied — see the JDBC quickstart above                                     |
+| Good for | The other 95% of use cases. | Payments and anything else where a replayed side effect is unacceptable, **if you use it the way described below.**                                    |
 
 **Measured overhead** (200 requests, 20 warmup iterations, real Redis/Postgres via Testcontainers on
 Docker Desktop for Windows): **p50 ~5–6.4ms / p99 up to ~40ms** added by an `@Idempotent` endpoint

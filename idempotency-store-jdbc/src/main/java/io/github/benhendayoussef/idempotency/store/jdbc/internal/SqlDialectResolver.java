@@ -52,6 +52,9 @@ public final class SqlDialectResolver {
         if (normalized.contains("mysql") || normalized.contains("mariadb")) {
             return new MySqlDialect();
         }
+        if (normalized.contains("oracle")) {
+            return new OracleDialect();
+        }
         throw new IllegalStateException(
                 "Unsupported database for idempotency.store=jdbc: the DataSource reports itself as \""
                 + productName + "\", and only PostgreSQL and MySQL/MariaDB are implemented. Set "
