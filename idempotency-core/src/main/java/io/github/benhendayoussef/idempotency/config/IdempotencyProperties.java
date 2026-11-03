@@ -306,7 +306,7 @@ public class IdempotencyProperties {
             this.maximumSize = maximumSize;
         }
     }
-    public enum Dialect { AUTO, POSTGRES, MYSQL }
+    public enum Dialect { AUTO, POSTGRES, MYSQL, ORACLE }
     public enum Mode { ASPECT, FILTER }
 
     public enum OnSilentRollback { RETURN_RESPONSE, FAIL }

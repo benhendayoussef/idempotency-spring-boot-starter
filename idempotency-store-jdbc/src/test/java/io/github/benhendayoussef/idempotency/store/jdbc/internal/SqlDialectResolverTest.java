@@ -27,6 +27,12 @@ class SqlDialectResolverTest {
         assertThat(SqlDialectResolver.forProductName("MariaDB").name()).isEqualTo("MySQL");
     }
 
+
+    @Test
+    void oracleMapsToOracleDialect() {
+        assertThat(SqlDialectResolver.forProductName("Oracle").name()).isEqualTo("Oracle");
+    }
+
     @Test
     void matchingIsCaseInsensitive() {
         // JDBC drivers are inconsistent about casing, and this is a plain string comparison.

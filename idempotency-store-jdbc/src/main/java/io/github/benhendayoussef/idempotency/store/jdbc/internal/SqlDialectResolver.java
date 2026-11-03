@@ -31,7 +31,7 @@ public final class SqlDialectResolver {
             throw new IllegalStateException(
                     "idempotency.store=jdbc with idempotency.jdbc.dialect=auto could not connect to the "
                     + "DataSource to detect which database it is. Fix the DataSource, or set "
-                    + "idempotency.jdbc.dialect explicitly (postgres or mysql) to skip detection.", e);
+                    + "idempotency.jdbc.dialect explicitly (postgres, mysql, ) to skip detection.", e);
         }
         return forProductName(product);
     }
@@ -51,6 +51,9 @@ public final class SqlDialectResolver {
         }
         if (normalized.contains("mysql") || normalized.contains("mariadb")) {
             return new MySqlDialect();
+        }
+        if (normalized.contains("oracle")) {
+            return new OracleDialect();
         }
         throw new IllegalStateException(
                 "Unsupported database for idempotency.store=jdbc: the DataSource reports itself as \""

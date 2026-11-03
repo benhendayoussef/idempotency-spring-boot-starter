@@ -30,8 +30,8 @@ import io.github.benhendayoussef.idempotency.store.jdbc.internal.IdempotencySqlD
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcIdempotencyStore;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.LazySqlDialect;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.MySqlDialect;
+import io.github.benhendayoussef.idempotency.store.jdbc.internal.OracleDialect;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.PostgresDialect;
-import io.github.benhendayoussef.idempotency.store.jdbc.internal.SqlDialectResolver;
 import io.github.benhendayoussef.idempotency.store.jdbc.internal.JdbcTransactionRunner;
 import io.github.benhendayoussef.idempotency.store.redis.internal.RedisIdempotencyStore;
 import java.util.EnumMap;
@@ -254,6 +254,7 @@ public class IdempotencyAutoConfiguration {
             return switch (props.getJdbc().getDialect()) {
                 case POSTGRES -> new PostgresDialect();
                 case MYSQL -> new MySqlDialect();
+                case ORACLE -> new OracleDialect();
                 // Detection opens one connection at startup. That is a deliberate trade: the
                 // alternative is discovering the wrong SQL was chosen from a duplicate execution
                 // in production, which is untraceable back to here.

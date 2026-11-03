@@ -107,7 +107,7 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     private IdempotencyRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
-        Integer status = (Integer) rs.getObject("status");
+        Integer status = Optional.ofNullable(rs.getObject("status")).map(s -> (Number)s).map(Number::intValue).orElse(null);
         return new IdempotencyRecord(
                 State.valueOf(rs.getString("state")),
                 rs.getString("fingerprint"),
