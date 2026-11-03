@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -110,7 +111,8 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
         Integer status = Optional.ofNullable(rs.getObject("status")).map(s -> (Number)s).map(Number::intValue).orElse(null);
         return new IdempotencyRecord(
                 State.valueOf(rs.getString("state")),
-                rs.getString("fingerprint"),
+                // Oracle stores an empty fingerprint as NULL; the aspect reads "" as "no fingerprint".
+                Objects.toString(rs.getString("fingerprint"), ""),
                 status,
                 rs.getString("payload_type"),
                 rs.getString("payload"),

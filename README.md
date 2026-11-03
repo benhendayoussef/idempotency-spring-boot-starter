@@ -81,7 +81,7 @@ For **MySQL or MariaDB**, change three things: the JDBC URL, the driver
 on first use, so `idempotency.jdbc.dialect` only needs setting to skip detection.
 
 Similarly for **Oracle**, the schema is (`classpath:db/idempotency/oracle.sql`).
-> Minimum Oracle version required is 19c with minimum patch version 19.28.0.0: in case of previous version please override the schema to avoid the `IF NOT EXISTS` syntax or ovoid the initialization  
+> Minimum Oracle version required is 19c with minimum patch version 19.28.0.0: in case of previous version please override the schema to avoid the `IF NOT EXISTS` syntax or avoid the initialization  
 
 The same `@Idempotent` annotation and `curl` round trip from the Redis quickstart apply unchanged.
 
