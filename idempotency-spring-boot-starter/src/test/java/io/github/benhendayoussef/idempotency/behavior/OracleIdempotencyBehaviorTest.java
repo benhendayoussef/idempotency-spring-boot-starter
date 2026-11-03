@@ -66,7 +66,7 @@ class OracleIdempotencyBehaviorTest extends AbstractIdempotencyBehaviorTest {
 
 
         @Test
-        void autoDetectionPicksTheMySqlDialectWithoutBeingTold() throws Exception {
+        void autoDetectionPicksTheOracleDialectWithoutBeingTold() throws Exception {
                 // idempotency.jdbc.dialect is left at AUTO above, so this asserts detection rather than
                 // configuration - the case every Oracle user actually hits.
                 //

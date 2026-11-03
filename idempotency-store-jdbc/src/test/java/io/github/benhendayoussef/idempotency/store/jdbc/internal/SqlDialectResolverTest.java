@@ -29,7 +29,7 @@ class SqlDialectResolverTest {
 
 
     @Test
-    void oracleMapsToOraclelDialect() {
+    void oracleMapsToOracleDialect() {
         assertThat(SqlDialectResolver.forProductName("Oracle").name()).isEqualTo("Oracle");
     }
 

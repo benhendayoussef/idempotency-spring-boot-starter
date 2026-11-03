@@ -3,17 +3,16 @@ package io.github.benhendayoussef.idempotency.store.jdbc.internal;
 import io.github.benhendayoussef.idempotency.api.IdempotencyRecord;
 import io.github.benhendayoussef.idempotency.api.IdempotencyRecord.State;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Postgres-backed store. {@link #complete(String, IdempotencyRecord, Duration)} joins an
@@ -108,8 +107,7 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     private IdempotencyRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
-        // use -1 as default in case the status has not been provided
-        Integer status = Optional.ofNullable(rs.getObject("status")).map(s -> (Number)s).map(Number::intValue).orElse(-1);
+        Integer status = Optional.ofNullable(rs.getObject("status")).map(s -> (Number)s).map(Number::intValue).orElse(null);
         return new IdempotencyRecord(
                 State.valueOf(rs.getString("state")),
                 rs.getString("fingerprint"),
