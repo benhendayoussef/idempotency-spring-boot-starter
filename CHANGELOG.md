@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Oracle support for `idempotency.store=jdbc`.** Set `idempotency.jdbc.dialect=oracle`, or leave it
+  on `auto` to detect it. The schema is `classpath:db/idempotency/oracle.sql`; `IF NOT EXISTS`
+  needs Oracle 23ai or 19c with patch 19.28 or later (see the README). Contributed by
+  Arnaldo De Maio.
+
+### Changed
+
+- The Oracle schema leaves `fingerprint` nullable, because Oracle stores an empty string as `NULL`;
+  the JDBC store reads it back as an empty string.
+
 ## [1.0.1] - 2026-10-29
 
 ### Fixed

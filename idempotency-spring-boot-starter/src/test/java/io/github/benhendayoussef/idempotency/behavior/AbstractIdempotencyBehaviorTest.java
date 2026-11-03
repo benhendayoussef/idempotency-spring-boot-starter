@@ -537,25 +537,25 @@ abstract class AbstractIdempotencyBehaviorTest {
         assertThat(controller.listCount()).isEqualTo(1);
     }
 
-    // --- Row 19: stored payloadType no longer matches the method signature -> 422 --
+    // --- Row 19: stored payloadType no longer matches the method signature -> re-executes --
 
     @Test
-    void row19_storedPayloadTypeMismatch_422ReturnedAndNoControllerInteraction() throws Exception {
+    void row19_storedPayloadTypeMismatch_reExecutesCleanlyNoDeserializationCrash() throws Exception {
         String key = newKey();
         MockHttpServletRequest fakeRequest = new MockHttpServletRequest("POST", "/m/echo");
         fakeRequest.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/m/echo");
         String storageKey = composer.compose(key, "", fakeRequest);
 
-        store.claim(storageKey, "-", Duration.ofMinutes(5));
+        store.claim(storageKey, "", Duration.ofMinutes(5));
         var staleRecord = new IdempotencyRecord(
-                State.COMPLETED, "-", 201, "java.lang.String", "\"stale\"", Instant.now());
+                State.COMPLETED, "", 201, "java.lang.String", "\"stale\"", Instant.now());
         store.complete(storageKey, staleRecord, Duration.ofMinutes(5));
 
         mockMvc.perform(post("/m/echo").header("Idempotency-Key", key)
                         .contentType("application/json").content("{\"a\":1}"))
-                .andExpect(status().is(422));
+                .andExpect(status().isCreated());
 
-        assertThat(controller.echoCount()).isEqualTo(0);
+        assertThat(controller.echoCount()).isEqualTo(1);
     }
 
     // --- Row 20: response body exceeds max-payload-size -> not stored, request still succeeds
