@@ -29,6 +29,7 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.TimeoutException;
@@ -142,6 +143,10 @@ public class IdempotencyAspect implements Ordered {
         String fp = idempotent.fingerprintArgs()
                 ? fingerprinter.fingerprint(method, pjp.getArgs()) : "";
 
+        // One owner per request: whatever this run writes to the key afterwards is checked against
+        // it, so a run whose claim expired mid-handler cannot settle a claim someone else now holds.
+        String owner = UUID.randomUUID().toString();
+
         // Bounded to 2 attempts: a released-while-we-waited record re-enters the claim path once.
         // Never recurse here - that is an infinite loop waiting to happen under sustained churn.
         for (int attempt = 0; attempt < 2; attempt++) {
@@ -150,7 +155,7 @@ public class IdempotencyAspect implements Ordered {
                 // claimTtlFor, not ttl: the claim is a lease on an in-flight request, the retention
                 // TTL is how long the finished response stays replayable. Passing one value for both
                 // is what let a crashed process lock a key for 24 hours.
-                claim = store.claim(storeKey, fp, props.claimTtlFor(ttl));
+                claim = store.claim(storeKey, fp, props.claimTtlFor(ttl), owner);
             } catch (RuntimeException e) {
                 return handleStoreFailure(pjp, e);
             }
@@ -163,20 +168,22 @@ public class IdempotencyAspect implements Ordered {
                 return outcome;
             }
 
-            return execute(pjp, storeKey, fp, ttl, method);
+            return execute(pjp, storeKey, owner, fp, ttl, method);
         }
-        return execute(pjp, storeKey, fp, ttl, method);
+        // Executed without a claim of our own. If another request holds the key by the time this
+        // finishes, the owner check keeps this run from storing over it.
+        return execute(pjp, storeKey, owner, fp, ttl, method);
     }
 
-    private Object execute(ProceedingJoinPoint pjp, String storeKey, String fp, Duration ttl, Method method)
-            throws Throwable {
+    private Object execute(ProceedingJoinPoint pjp, String storeKey, String owner, String fp, Duration ttl,
+            Method method) throws Throwable {
         // around() has already claimed and committed the key by the time we get here, outside any
         // transaction this method opens. That ordering is load-bearing: if the IN_PROGRESS row only
         // became visible when the handler's transaction commits, every concurrent duplicate would
         // race straight past the claim instead of seeing it.
         return txRunner == null
-                ? executeSeparateCommits(pjp, storeKey, fp, ttl, method)
-                : executeJoined(pjp, storeKey, fp, ttl, method);
+                ? executeSeparateCommits(pjp, storeKey, owner, fp, ttl, method)
+                : executeJoined(pjp, storeKey, owner, fp, ttl, method);
     }
 
     /**
@@ -185,14 +192,15 @@ public class IdempotencyAspect implements Ordered {
      * no completion record. Unchanged from v0.1.
      */
     private Object executeSeparateCommits(
-            ProceedingJoinPoint pjp, String storeKey, String fp, Duration ttl, Method method) throws Throwable {
+            ProceedingJoinPoint pjp, String storeKey, String owner, String fp, Duration ttl, Method method)
+            throws Throwable {
         try {
             Object result = pjp.proceed();
-            completeOrRelease(storeKey, result, fp, ttl, method);
+            completeOrRelease(storeKey, owner, result, fp, ttl, method);
             metrics.executed();
             return result;
         } catch (Throwable t) {
-            settleFailure(storeKey, fp, ttl, t);
+            settleFailure(storeKey, owner, fp, ttl, t);
             throw t;
         }
     }
@@ -205,7 +213,8 @@ public class IdempotencyAspect implements Ordered {
      * opening and closing its own beforehand, which is what makes the single commit possible.
      */
     private Object executeJoined(
-            ProceedingJoinPoint pjp, String storeKey, String fp, Duration ttl, Method method) throws Throwable {
+            ProceedingJoinPoint pjp, String storeKey, String owner, String fp, Duration ttl, Method method)
+            throws Throwable {
         // Captured inside the transaction so it survives an UnexpectedRollbackException raised at
         // commit time, after the handler has already produced its result.
         Object[] handlerResult = new Object[1];
@@ -225,13 +234,15 @@ public class IdempotencyAspect implements Ordered {
                     // and the claim can be cleaned up once this transaction is closed.
                     oversized[0] = true;
                 } else {
-                    store.complete(storeKey, record, ttl);
+                    // A lost claim leaves the handler's writes to commit: they happened, and this
+                    // client is told about them. Only the cached response is withheld.
+                    complete(storeKey, owner, record, ttl);
                 }
                 return r;
             });
 
             if (oversized[0]) {
-                releaseQuietly(storeKey);
+                releaseQuietly(storeKey, owner);
                 log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached", storeKey);
             }
             metrics.executed();
@@ -248,7 +259,7 @@ public class IdempotencyAspect implements Ordered {
                 // Either way the claim is released - nothing was committed, so the key must not stay
                 // held. What differs is what the caller is told, which is idempotency.jdbc.
                 // on-silent-rollback.
-                releaseQuietly(storeKey);
+                releaseQuietly(storeKey, owner);
                 metrics.released();
                 log.warn("Handler for idempotency key {} marked the transaction rollback-only; "
                         + "nothing was committed and the key has been released", storeKey);
@@ -264,7 +275,7 @@ public class IdempotencyAspect implements Ordered {
                 return handlerResult[0];
             }
 
-            settleFailure(storeKey, fp, ttl, t);
+            settleFailure(storeKey, owner, fp, ttl, t);
             throw t;
         }
     }
@@ -273,14 +284,37 @@ public class IdempotencyAspect implements Ordered {
      * Store the response, unless it is too large to be worth caching. Default path only - the joined
      * path inlines the same decision so it can defer the release until its transaction has closed.
      */
-    private void completeOrRelease(String storeKey, Object result, String fp, Duration ttl, Method method) {
+    private void completeOrRelease(String storeKey, String owner, Object result, String fp, Duration ttl,
+            Method method) {
         IdempotencyRecord record = toRecord(result, fp, method);
         if (exceedsMaxPayload(record)) {
-            store.release(storeKey);
+            release(storeKey, owner);
             log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached", storeKey);
         } else {
-            store.complete(storeKey, record, ttl);
+            complete(storeKey, owner, record, ttl);
         }
+    }
+
+    /**
+     * Stores this run's record unless another request has claimed the key since this run's claim
+     * expired (issue #19). The caller still returns its own result either way: its handler ran, and
+     * the client is owed what it did. The key keeps the other request's claim or response.
+     */
+    private boolean complete(String storeKey, String owner, IdempotencyRecord record, Duration ttl) {
+        if (store.complete(storeKey, owner, record, ttl)) {
+            return true;
+        }
+        LostClaim.report(metrics, props.getClaimTtl(), storeKey, "stored");
+        return false;
+    }
+
+    /** Releases this run's claim, unless the key is now another request's - see {@link #complete}. */
+    private boolean release(String storeKey, String owner) {
+        if (store.release(storeKey, owner)) {
+            return true;
+        }
+        LostClaim.report(metrics, props.getClaimTtl(), storeKey, "released");
+        return false;
     }
 
     /**
@@ -292,19 +326,20 @@ public class IdempotencyAspect implements Ordered {
      * is a deterministic client error and stays replayable even though the business data it
      * described was discarded, matching v0.1 in both modes.
      */
-    private void settleFailure(String storeKey, String fp, Duration ttl, Throwable t) {
+    private void settleFailure(String storeKey, String owner, String fp, Duration ttl, Throwable t) {
         if (shouldRelease(t)) {
-            store.release(storeKey);
-            metrics.released();
+            if (release(storeKey, owner)) {
+                metrics.released();
+            }
         } else {
-            store.complete(storeKey, toErrorRecord(t, fp), ttl);
+            complete(storeKey, owner, toErrorRecord(t, fp), ttl);
         }
     }
 
     /** Releasing is best-effort cleanup; failing here must not mask the outcome being reported. */
-    private void releaseQuietly(String storeKey) {
+    private void releaseQuietly(String storeKey, String owner) {
         try {
-            store.release(storeKey);
+            release(storeKey, owner);
         } catch (RuntimeException e) {
             log.warn("Failed to release idempotency key {} after a rolled-back transaction; "
                     + "it will be reclaimed when its TTL expires", storeKey, e);

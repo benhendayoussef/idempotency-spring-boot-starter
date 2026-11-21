@@ -9,6 +9,7 @@ import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore.ClaimResult;
 import io.github.benhendayoussef.idempotency.api.Idempotent;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
+import io.github.benhendayoussef.idempotency.internal.LostClaim;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -125,9 +127,13 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
         // Not empty: Oracle stores '' as NULL, which the NOT NULL fingerprint column rejects.
         String fingerprint = NO_FINGERPRINT;
 
+        // Checked by every later write to the key, so a request whose claim expired mid-handler
+        // cannot settle a claim someone else holds now (issue #19).
+        String owner = UUID.randomUUID().toString();
+
         ClaimResult claim;
         try {
-            claim = store.claim(storeKey, fingerprint, props.claimTtlFor(ttl));
+            claim = store.claim(storeKey, fingerprint, props.claimTtlFor(ttl), owner);
         } catch (RuntimeException e) {
             metrics.storeFailure();
             if (props.getOnStoreFailure() == IdempotencyProperties.OnStoreFailure.FAIL) {
@@ -143,11 +149,11 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
             handleExisting(request, response, chain, held.record(), storeKey);
             return;
         }
-        execute(request, response, chain, storeKey, ttl);
+        execute(request, response, chain, storeKey, owner, ttl);
     }
 
     private void execute(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
-            String storeKey, Duration ttl) throws ServletException, IOException {
+            String storeKey, String owner, Duration ttl) throws ServletException, IOException {
         ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
         boolean completed = false;
         try {
@@ -155,17 +161,18 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
 
             CapturedResponse captured = capture(wrapper);
             if (shouldRelease(captured.status())) {
-                store.release(storeKey);
-                metrics.released();
+                if (release(storeKey, owner)) {
+                    metrics.released();
+                }
             } else {
                 String json = payloadMapper.writeValueAsString(captured);
                 if (json.length() > props.getMaxPayloadSize().toBytes()) {
-                    store.release(storeKey);
+                    release(storeKey, owner);
                     log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached",
                             storeKey);
-                } else {
-                    store.complete(storeKey, new IdempotencyRecord(State.COMPLETED, NO_FINGERPRINT, captured.status(),
-                            RAW_PAYLOAD_TYPE, json, Instant.now()), ttl);
+                } else if (!store.complete(storeKey, owner, new IdempotencyRecord(State.COMPLETED, NO_FINGERPRINT,
+                        captured.status(), RAW_PAYLOAD_TYPE, json, Instant.now()), ttl)) {
+                    LostClaim.report(metrics, props.getClaimTtl(), storeKey, "stored");
                 }
                 metrics.executed();
             }
@@ -175,7 +182,7 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
                 // The chain threw before a status was ever produced, so there is nothing to store and
                 // nothing to replay. Release rather than leaving the key IN_PROGRESS for its whole
                 // TTL, which would make every retry conflict against a request that never finished.
-                releaseQuietly(storeKey);
+                releaseQuietly(storeKey, owner);
             }
             // Must happen on every path: the cached body is buffered and never reaches the client
             // until it is copied out. Skipping this on the error path would turn a handler exception
@@ -274,9 +281,18 @@ public class IdempotencyFilter extends OncePerRequestFilter implements Ordered {
         response.sendError(HttpServletResponse.SC_CONFLICT, "A request with this idempotency key is in progress");
     }
 
-    private void releaseQuietly(String storeKey) {
+    /** Releases this request's claim, unless the key is now another request's. */
+    private boolean release(String storeKey, String owner) {
+        if (store.release(storeKey, owner)) {
+            return true;
+        }
+        LostClaim.report(metrics, props.getClaimTtl(), storeKey, "released");
+        return false;
+    }
+
+    private void releaseQuietly(String storeKey, String owner) {
         try {
-            store.release(storeKey);
+            release(storeKey, owner);
         } catch (RuntimeException e) {
             log.warn("Failed to release idempotency key {} after a failed request; it will expire with its TTL",
                     storeKey, e);

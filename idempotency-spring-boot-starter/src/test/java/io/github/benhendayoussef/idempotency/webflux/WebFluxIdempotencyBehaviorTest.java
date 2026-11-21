@@ -2,10 +2,20 @@ package io.github.benhendayoussef.idempotency.webflux;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.benhendayoussef.idempotency.api.ConflictPolicy;
 import io.github.benhendayoussef.idempotency.api.Idempotent;
 import io.github.benhendayoussef.idempotency.behavior.TestAutoconfigExcludes;
+import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import org.springframework.test.web.reactive.server.EntityExchangeResult;
+import reactor.core.scheduler.Schedulers;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,6 +64,9 @@ class WebFluxIdempotencyBehaviorTest {
 
     @Autowired
     private ApplicationContext context;
+
+    @Autowired
+    private IdempotencyProperties props;
 
     private WebTestClient client;
 
@@ -193,6 +206,108 @@ class WebFluxIdempotencyBehaviorTest {
                 .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
     }
 
+    // Lost claim (issue #19): the servlet matrix's sequences, through the reactive aspect.
+
+    private static final Duration SHORT_CLAIM = Duration.ofMillis(300);
+
+    /** One scripted invocation of {@code /r/lease}: signals when it starts, waits to be released. */
+    static final class LeaseStep {
+        final CountDownLatch started = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final boolean fail5xx;
+
+        LeaseStep(boolean fail5xx) {
+            this.fail5xx = fail5xx;
+        }
+
+        LeaseStep unblocked() {
+            release.countDown();
+            return this;
+        }
+    }
+
+    private EntityExchangeResult<String> lease(String key) {
+        return post("/r/lease", key, "{}").exchange().expectBody(String.class).returnResult();
+    }
+
+    @Test
+    void lostClaim_sequenceA_lateCompletionDoesNotOverwriteWinnersResponse() throws Exception {
+        String key = "wf-lost-a-" + System.nanoTime();
+        var a = new LeaseStep(false);
+        controller.armLease(a, new LeaseStep(false).unblocked());
+
+        Duration originalClaimTtl = props.getClaimTtl();
+        props.setClaimTtl(SHORT_CLAIM);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<EntityExchangeResult<String>> runA = pool.submit(() -> lease(key));
+            assertThat(a.started.await(10, TimeUnit.SECONDS)).as("run A must have claimed the key").isTrue();
+
+            Thread.sleep(SHORT_CLAIM.toMillis() * 3); // A's claim is now expired, A still running
+
+            var b = lease(key);
+            assertThat(b.getStatus().value()).isEqualTo(201);
+            assertThat(b.getResponseBody()).contains("\"run\":2");
+
+            a.release.countDown();
+            assertThat(runA.get(10, TimeUnit.SECONDS).getStatus().value()).isEqualTo(201);
+
+            var replay = lease(key);
+            assertThat(replay.getStatus().value()).isEqualTo(201);
+            assertThat(replay.getResponseBody())
+                    .as("a replay must return what client B was told, not what the run that lost "
+                            + "its claim produced afterwards")
+                    .isEqualTo(b.getResponseBody());
+            assertThat(controller.leaseCount()).isEqualTo(2);
+        } finally {
+            a.release.countDown();
+            pool.shutdownNow();
+            props.setClaimTtl(originalClaimTtl);
+        }
+    }
+
+    @Test
+    void lostClaim_sequenceB_lateReleaseDoesNotDeleteWinnersClaim() throws Exception {
+        String key = "wf-lost-b-" + System.nanoTime();
+        var a = new LeaseStep(true);
+        var b = new LeaseStep(false);
+        controller.armLease(a, b, new LeaseStep(false).unblocked());
+
+        Duration originalClaimTtl = props.getClaimTtl();
+        ConflictPolicy originalConflict = props.getOnConflict();
+        props.setClaimTtl(SHORT_CLAIM);
+        // The reactive aspect takes the policy from properties only. FAIL_FAST so C answers at once.
+        props.setOnConflict(ConflictPolicy.FAIL_FAST);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<EntityExchangeResult<String>> runA = pool.submit(() -> lease(key));
+            assertThat(a.started.await(10, TimeUnit.SECONDS)).as("run A must have claimed the key").isTrue();
+
+            Thread.sleep(SHORT_CLAIM.toMillis() * 3); // A's claim is now expired, A still running
+
+            props.setClaimTtl(Duration.ofMinutes(5));
+            Future<EntityExchangeResult<String>> runB = pool.submit(() -> lease(key));
+            assertThat(b.started.await(10, TimeUnit.SECONDS)).as("run B must have reclaimed the key").isTrue();
+
+            a.release.countDown(); // A now fails with a 5xx, which releases the key
+            assertThat(runA.get(10, TimeUnit.SECONDS).getStatus().value()).isEqualTo(500);
+
+            assertThat(lease(key).getStatus().value()).isEqualTo(409);
+            assertThat(controller.leaseCount())
+                    .as("B still holds the key, so C must be told it is in flight - not run a third time")
+                    .isEqualTo(2);
+
+            b.release.countDown();
+            assertThat(runB.get(10, TimeUnit.SECONDS).getStatus().value()).isEqualTo(201);
+        } finally {
+            a.release.countDown();
+            b.release.countDown();
+            pool.shutdownNow();
+            props.setClaimTtl(originalClaimTtl);
+            props.setOnConflict(originalConflict);
+        }
+    }
+
     @SpringBootConfiguration
     @EnableAutoConfiguration
     static class ReactiveApp {
@@ -295,6 +410,37 @@ class WebFluxIdempotencyBehaviorTest {
             slow.incrementAndGet();
             return Mono.delay(Duration.ofMillis(400))
                     .map(t -> ResponseEntity.status(HttpStatus.CREATED).body(Map.of("ok", true)));
+        }
+
+        private final AtomicInteger lease = new AtomicInteger();
+        private volatile List<LeaseStep> leaseSteps = List.of();
+
+        void armLease(LeaseStep... steps) {
+            lease.set(0);
+            leaseSteps = List.of(steps);
+        }
+
+        int leaseCount() {
+            return lease.get();
+        }
+
+        /** Invocation n follows step n, off the event loop; the body names the run. */
+        @Idempotent
+        @PostMapping("/r/lease")
+        Mono<ResponseEntity<Map<String, Object>>> lease(@RequestBody Map<String, Object> body) {
+            return Mono.fromCallable(() -> {
+                int run = lease.incrementAndGet();
+                var steps = leaseSteps;
+                if (run <= steps.size()) {
+                    LeaseStep step = steps.get(run - 1);
+                    step.started.countDown();
+                    step.release.await(30, TimeUnit.SECONDS);
+                    if (step.fail5xx) {
+                        throw new InfrastructureException();
+                    }
+                }
+                return ResponseEntity.status(HttpStatus.CREATED).body(Map.<String, Object>of("run", run));
+            }).subscribeOn(Schedulers.boundedElastic());
         }
 
         // ResponseStatusException rather than a plain exception annotated @ResponseStatus.

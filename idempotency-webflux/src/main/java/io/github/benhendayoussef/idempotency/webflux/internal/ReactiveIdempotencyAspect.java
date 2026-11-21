@@ -16,11 +16,13 @@ import io.github.benhendayoussef.idempotency.api.IdempotencyStoreUnavailableExce
 import io.github.benhendayoussef.idempotency.api.Idempotent;
 import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.internal.ArgumentFingerprinter;
+import io.github.benhendayoussef.idempotency.internal.LostClaim;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -145,13 +147,17 @@ public class ReactiveIdempotencyAspect implements Ordered {
         // response also completes empty, so the handler ran a second time - and a replay of that
         // stored empty response ran it a third. Emptiness is a valid outcome here, so it cannot
         // double as a control signal.
-        return blocking(() -> store.claim(storeKey, fingerprint, props.claimTtlFor(ttl)))
+        //
+        // The owner is checked by every later write to the key, so a request whose claim expired
+        // mid-handler cannot settle a claim someone else holds now (issue #19).
+        String owner = UUID.randomUUID().toString();
+        return blocking(() -> store.claim(storeKey, fingerprint, props.claimTtlFor(ttl), owner))
                 .map(java.util.Optional::of)
                 .onErrorResume(RuntimeException.class, this::onClaimFailure)
                 .flatMap(claim -> claim
                         .map(c -> c instanceof ClaimResult.AlreadyHeld held
                                 ? handleExisting(pjp, method, held.record(), storeKey, fingerprint, ttl)
-                                : execute(pjp, method, storeKey, fingerprint, ttl))
+                                : execute(pjp, method, storeKey, owner, fingerprint, ttl))
                         // Empty Optional: the store was unreachable and the policy said PROCEED.
                         .orElseGet(() -> proceedAsMono(pjp)));
     }
@@ -167,7 +173,7 @@ public class ReactiveIdempotencyAspect implements Ordered {
 
     // --- Execute path -------------------------------------------------------------------------
 
-    private Mono<Object> execute(ProceedingJoinPoint pjp, Method method, String storeKey,
+    private Mono<Object> execute(ProceedingJoinPoint pjp, Method method, String storeKey, String owner,
             String fingerprint, Duration ttl) {
         // singleOptional, not a bare flatMap: a handler returning Mono.empty() is a legitimate
         // response with no body, and it must still be recorded as completed. Without lifting the
@@ -176,17 +182,17 @@ public class ReactiveIdempotencyAspect implements Ordered {
         // request that actually succeeded.
         return proceedAsMono(pjp)
                 .singleOptional()
-                .flatMap(result -> completeThen(result.orElse(null), method, storeKey, fingerprint, ttl)
+                .flatMap(result -> completeThen(result.orElse(null), method, storeKey, owner, fingerprint, ttl)
                         .then(Mono.justOrEmpty(result)))
-                .onErrorResume(t -> settleFailure(storeKey, fingerprint, ttl, t).then(Mono.error(t)));
+                .onErrorResume(t -> settleFailure(storeKey, owner, fingerprint, ttl, t).then(Mono.error(t)));
     }
 
-    private Mono<Void> completeThen(Object result, Method method, String storeKey, String fingerprint,
-            Duration ttl) {
+    private Mono<Void> completeThen(Object result, Method method, String storeKey, String owner,
+            String fingerprint, Duration ttl) {
         IdempotencyRecord record = toRecord(result, fingerprint, method);
         if (exceedsMaxPayload(record)) {
             return blocking(() -> {
-                store.release(storeKey);
+                release(storeKey, owner);
                 log.warn("Idempotent response for key {} exceeds idempotency.max-payload-size; not cached",
                         storeKey);
                 metrics.executed();
@@ -194,24 +200,45 @@ public class ReactiveIdempotencyAspect implements Ordered {
             }).then();
         }
         return blocking(() -> {
-            store.complete(storeKey, record, ttl);
+            complete(storeKey, owner, record, ttl);
             metrics.executed();
             return true;
         }).then();
     }
 
-    private Mono<Void> settleFailure(String storeKey, String fingerprint, Duration ttl, Throwable t) {
+    private Mono<Void> settleFailure(String storeKey, String owner, String fingerprint, Duration ttl,
+            Throwable t) {
         if (shouldRelease(t)) {
             return blocking(() -> {
-                store.release(storeKey);
-                metrics.released();
+                if (release(storeKey, owner)) {
+                    metrics.released();
+                }
                 return null;
             }).then();
         }
         return blocking(() -> {
-            store.complete(storeKey, toErrorRecord(t, fingerprint), ttl);
+            complete(storeKey, owner, toErrorRecord(t, fingerprint), ttl);
             return null;
         }).then();
+    }
+
+    /**
+     * Stores this request's record unless another request has claimed the key since this one's
+     * claim expired. The caller still answers its own client: its handler ran.
+     */
+    private void complete(String storeKey, String owner, IdempotencyRecord record, Duration ttl) {
+        if (!store.complete(storeKey, owner, record, ttl)) {
+            LostClaim.report(metrics, props.getClaimTtl(), storeKey, "stored");
+        }
+    }
+
+    /** Releases this request's claim, unless the key is now another request's. */
+    private boolean release(String storeKey, String owner) {
+        if (store.release(storeKey, owner)) {
+            return true;
+        }
+        LostClaim.report(metrics, props.getClaimTtl(), storeKey, "released");
+        return false;
     }
 
     // --- Replay / conflict path ---------------------------------------------------------------

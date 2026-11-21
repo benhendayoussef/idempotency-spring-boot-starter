@@ -5,7 +5,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import io.github.benhendayoussef.idempotency.api.ConflictPolicy;
 import io.github.benhendayoussef.idempotency.api.Idempotent;
+import io.github.benhendayoussef.idempotency.config.IdempotencyProperties;
 import io.github.benhendayoussef.idempotency.api.IdempotencyRecord;
 import io.github.benhendayoussef.idempotency.api.IdempotencyRecord.State;
 import io.github.benhendayoussef.idempotency.api.IdempotencyKeys;
@@ -18,7 +20,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.test.web.servlet.MvcResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,6 +69,9 @@ class FilterModeBehaviorTest {
 
     @Autowired
     private IdempotencyStore store;
+
+    @Autowired
+    private IdempotencyProperties props;
 
     @BeforeEach
     void reset() {
@@ -234,6 +244,102 @@ class FilterModeBehaviorTest {
         assertThat(controller.createdCount()).isZero();
     }
 
+    // Lost claim (issue #19): the sequences AbstractIdempotencyBehaviorTest runs against the aspect,
+    // here through the filter, which settles the key on its own code path.
+
+    private static final Duration SHORT_CLAIM = Duration.ofMillis(300);
+
+    @Test
+    void lostClaim_sequenceA_lateCompletionDoesNotOverwriteWinnersResponse() throws Exception {
+        String key = "lost-a-" + System.nanoTime();
+        var a = new AbstractIdempotencyBehaviorTest.LeaseStep(false);
+        controller.armLease(a, new AbstractIdempotencyBehaviorTest.LeaseStep(false).unblocked());
+
+        Duration originalClaimTtl = props.getClaimTtl();
+        props.setClaimTtl(SHORT_CLAIM);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<MvcResult> runA = pool.submit(() -> mockMvc.perform(post("/f/lease")
+                    .header("Idempotency-Key", key).contentType("application/json").content("{}")).andReturn());
+            assertThat(a.started.await(10, TimeUnit.SECONDS)).as("run A must have claimed the key").isTrue();
+
+            Thread.sleep(SHORT_CLAIM.toMillis() * 3); // A's claim is now expired, A still running
+
+            String bodyB = mockMvc.perform(post("/f/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}"))
+                    .andExpect(status().isCreated())
+                    .andExpect(header().doesNotExist("Idempotent-Replay"))
+                    .andReturn().getResponse().getContentAsString();
+            assertThat(bodyB).contains("\"run\":2");
+
+            a.release.countDown();
+            assertThat(runA.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(201);
+
+            String replay = mockMvc.perform(post("/f/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}"))
+                    .andExpect(status().isCreated())
+                    .andExpect(header().string("Idempotent-Replay", "true"))
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(replay)
+                    .as("a replay must return what client B was told, not what the run that lost "
+                            + "its claim produced afterwards")
+                    .isEqualTo(bodyB);
+            assertThat(controller.leaseCount()).isEqualTo(2);
+        } finally {
+            a.release.countDown();
+            pool.shutdownNow();
+            props.setClaimTtl(originalClaimTtl);
+        }
+    }
+
+    @Test
+    void lostClaim_sequenceB_lateReleaseDoesNotDeleteWinnersClaim() throws Exception {
+        String key = "lost-b-" + System.nanoTime();
+        var a = new AbstractIdempotencyBehaviorTest.LeaseStep(true);
+        var b = new AbstractIdempotencyBehaviorTest.LeaseStep(false);
+        controller.armLease(a, b, new AbstractIdempotencyBehaviorTest.LeaseStep(false).unblocked());
+
+        Duration originalClaimTtl = props.getClaimTtl();
+        ConflictPolicy originalConflict = props.getOnConflict();
+        props.setClaimTtl(SHORT_CLAIM);
+        // Filter mode takes the policy from properties only. FAIL_FAST so C answers 409 at once.
+        props.setOnConflict(ConflictPolicy.FAIL_FAST);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<MvcResult> runA = pool.submit(() -> mockMvc.perform(post("/f/lease")
+                    .header("Idempotency-Key", key).contentType("application/json").content("{}")).andReturn());
+            assertThat(a.started.await(10, TimeUnit.SECONDS)).as("run A must have claimed the key").isTrue();
+
+            Thread.sleep(SHORT_CLAIM.toMillis() * 3); // A's claim is now expired, A still running
+
+            props.setClaimTtl(Duration.ofMinutes(5));
+            Future<MvcResult> runB = pool.submit(() -> mockMvc.perform(post("/f/lease")
+                    .header("Idempotency-Key", key).contentType("application/json").content("{}")).andReturn());
+            assertThat(b.started.await(10, TimeUnit.SECONDS)).as("run B must have reclaimed the key").isTrue();
+
+            a.release.countDown(); // A now answers 500, which releases the key
+            assertThat(runA.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(500);
+
+            mockMvc.perform(post("/f/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}"))
+                    .andExpect(status().isConflict());
+
+            assertThat(controller.leaseCount())
+                    .as("B still holds the key, so C must be told it is in flight - not run a third time")
+                    .isEqualTo(2);
+
+            b.release.countDown();
+            assertThat(runB.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(201);
+        } finally {
+            a.release.countDown();
+            b.release.countDown();
+            pool.shutdownNow();
+            props.setClaimTtl(originalClaimTtl);
+            props.setOnConflict(originalConflict);
+        }
+    }
+
     @SpringBootConfiguration
     @EnableAutoConfiguration
     static class FilterApp {
@@ -331,6 +437,38 @@ class FilterModeBehaviorTest {
         ResponseEntity<Map<String, Object>> bad(@RequestBody Map<String, Object> body) {
             bad.incrementAndGet();
             return ResponseEntity.badRequest().body(Map.of("err", "nope"));
+        }
+
+        private final AtomicInteger lease = new AtomicInteger();
+        private volatile java.util.List<AbstractIdempotencyBehaviorTest.LeaseStep> leaseSteps = java.util.List.of();
+
+        void armLease(AbstractIdempotencyBehaviorTest.LeaseStep... steps) {
+            lease.set(0);
+            leaseSteps = java.util.List.of(steps);
+        }
+
+        int leaseCount() {
+            return lease.get();
+        }
+
+        /**
+         * Invocation n follows step n; the body names the run. A failing step answers 500 rather
+         * than throwing, so the filter settles it through its release-on-5xx path.
+         */
+        @Idempotent
+        @PostMapping("/f/lease")
+        ResponseEntity<Map<String, Object>> lease(@RequestBody Map<String, Object> body) throws InterruptedException {
+            int run = lease.incrementAndGet();
+            var steps = leaseSteps;
+            if (run <= steps.size()) {
+                var step = steps.get(run - 1);
+                step.started.countDown();
+                step.release.await(30, TimeUnit.SECONDS);
+                if (step.fail5xx) {
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("run", run));
+                }
+            }
+            return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("run", run));
         }
 
         @PostMapping("/f/plain")
