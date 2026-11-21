@@ -114,4 +114,67 @@ public final class MySqlDialect implements IdempotencySqlDialect {
                 FROM %s WHERE id = :id AND expires_at >= CURRENT_TIMESTAMP(6)
                 """.formatted(tableName);
     }
+
+    /** {@link #tryAcquire}'s algorithm unchanged, with the owner written by both statements. */
+    @Override
+    public boolean tryAcquireOwned(NamedParameterJdbcTemplate jdbc, String tableName, String id,
+            String fingerprint, long ttlMillis, String owner) {
+        var params = new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("fp", fingerprint)
+                .addValue("ttlMillis", ttlMillis)
+                .addValue("owner", owner, java.sql.Types.VARCHAR);
+
+        String reclaim = """
+                UPDATE %s SET
+                    state = 'IN_PROGRESS', fingerprint = :fp, status = NULL,
+                    payload_type = NULL, payload = NULL, created_at = CURRENT_TIMESTAMP(6),
+                    expires_at = %s, owner = :owner
+                WHERE id = :id AND expires_at < CURRENT_TIMESTAMP(6)
+                """.formatted(tableName, EXPIRY);
+        if (jdbc.update(reclaim, params) > 0) {
+            return true;
+        }
+        try {
+            jdbc.update("""
+                    INSERT INTO %s
+                        (id, state, fingerprint, status, payload_type, payload, created_at, expires_at, owner)
+                    VALUES (:id, 'IN_PROGRESS', :fp, NULL, NULL, NULL, CURRENT_TIMESTAMP(6), %s, :owner)
+                    """.formatted(tableName, EXPIRY), params);
+            return true;
+        } catch (DuplicateKeyException alreadyHeld) {
+            return false;
+        }
+    }
+
+    /**
+     * The conditional lives in the {@code WHERE}, so the found-rows driver mode cannot blur it: a
+     * row held by another owner is excluded and reports zero either way. A matched row always
+     * changes, because {@code expires_at} is restamped from a microsecond clock.
+     */
+    @Override
+    public String completeOwnedSql(String tableName) {
+        return """
+                UPDATE %s SET
+                    state = 'COMPLETED', fingerprint = :fp, status = :status,
+                    payload_type = :payloadType, payload = :payload, owner = :owner,
+                    expires_at = %s
+                WHERE id = :id
+                  AND (owner IS NULL OR owner = :owner OR expires_at < CURRENT_TIMESTAMP(6))
+                """.formatted(tableName, EXPIRY);
+    }
+
+    @Override
+    public String releaseOwnedSql(String tableName) {
+        return """
+                DELETE FROM %s
+                WHERE id = :id
+                  AND (owner IS NULL OR owner = :owner OR expires_at < CURRENT_TIMESTAMP(6))
+                """.formatted(tableName);
+    }
+
+    @Override
+    public String addOwnerColumnSql(String tableName) {
+        return "ALTER TABLE %s ADD COLUMN owner VARCHAR(36) NULL".formatted(tableName);
+    }
 }

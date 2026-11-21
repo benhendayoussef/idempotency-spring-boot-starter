@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS idempotency_record (
     payload       LONGTEXT,
     created_at    DATETIME(6)  NOT NULL,
     expires_at    DATETIME(6)  NOT NULL,
+    -- Added in 1.2. A table created by an earlier version needs it added by hand, since MySQL has
+    -- no ADD COLUMN IF NOT EXISTS:
+    --   ALTER TABLE idempotency_record ADD COLUMN owner VARCHAR(36) NULL
+    owner         VARCHAR(36),
     -- Declared inline because MySQL has no CREATE INDEX IF NOT EXISTS; re-running this file must
     -- stay harmless.
     INDEX ix_idempotency_expires (expires_at)

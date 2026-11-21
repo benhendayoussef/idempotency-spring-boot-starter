@@ -74,4 +74,59 @@ public final class OracleDialect implements IdempotencySqlDialect {
                 """.formatted(tableName);
     }
 
+    @Override
+    public boolean tryAcquireOwned(NamedParameterJdbcTemplate jdbc, String tableName, String id,
+            String fingerprint, long ttlMillis, String owner) {
+        try {
+            int rows = jdbc.update("""
+                MERGE INTO %s t
+                USING (SELECT :id AS id FROM dual) s
+                ON (t.id = s.id)
+                WHEN MATCHED THEN UPDATE SET
+                    t.state = 'IN_PROGRESS', t.fingerprint = :fp, t.status = NULL,
+                    t.payload_type = NULL, t.payload = NULL, t.created_at = SYSTIMESTAMP,
+                    t.expires_at = SYSTIMESTAMP + NUMTODSINTERVAL(:ttlMillis / 1000, 'SECOND'),
+                    t.owner = :owner
+                    WHERE t.expires_at < SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT
+                    (id, state, fingerprint, status, payload_type, payload, created_at, expires_at, owner)
+                VALUES (:id, 'IN_PROGRESS', :fp, NULL, NULL, NULL, SYSTIMESTAMP,
+                        SYSTIMESTAMP + NUMTODSINTERVAL(:ttlMillis / 1000, 'SECOND'), :owner)
+                """.formatted(tableName), new MapSqlParameterSource()
+                    .addValue("id", id)
+                    .addValue("fp", fingerprint)
+                    .addValue("ttlMillis", ttlMillis)
+                    .addValue("owner", owner, java.sql.Types.VARCHAR));
+            return rows == 1;
+        } catch (DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public String completeOwnedSql(String tableName) {
+        return """
+                UPDATE %s SET
+                    state = 'COMPLETED', fingerprint = :fp, status = :status,
+                    payload_type = :payloadType, payload = :payload, owner = :owner,
+                    expires_at = SYSTIMESTAMP + NUMTODSINTERVAL(:ttlMillis / 1000, 'SECOND')
+                WHERE id = :id
+                  AND (owner IS NULL OR owner = :owner OR expires_at < SYSTIMESTAMP)
+                """.formatted(tableName);
+    }
+
+    @Override
+    public String releaseOwnedSql(String tableName) {
+        return """
+                DELETE FROM %s
+                WHERE id = :id
+                  AND (owner IS NULL OR owner = :owner OR expires_at < SYSTIMESTAMP)
+                """.formatted(tableName);
+    }
+
+    @Override
+    public String addOwnerColumnSql(String tableName) {
+        return "ALTER TABLE %s ADD (owner VARCHAR2(36))".formatted(tableName);
+    }
+
 }

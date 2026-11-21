@@ -72,4 +72,52 @@ public final class PostgresDialect implements IdempotencySqlDialect {
                 """.formatted(tableName);
     }
 
+    @Override
+    public boolean tryAcquireOwned(NamedParameterJdbcTemplate jdbc, String tableName, String id,
+            String fingerprint, long ttlMillis, String owner) {
+        int rows = jdbc.update("""
+                INSERT INTO %s
+                    (id, state, fingerprint, status, payload_type, payload, created_at, expires_at, owner)
+                VALUES (:id, 'IN_PROGRESS', :fp, NULL, NULL, NULL, clock_timestamp(),
+                        clock_timestamp() + (:ttlMillis * INTERVAL '1 millisecond'), :owner)
+                ON CONFLICT (id) DO UPDATE SET
+                    state = 'IN_PROGRESS', fingerprint = :fp, status = NULL,
+                    payload_type = NULL, payload = NULL, created_at = clock_timestamp(),
+                    expires_at = clock_timestamp() + (:ttlMillis * INTERVAL '1 millisecond'),
+                    owner = :owner
+                WHERE %s.expires_at < clock_timestamp()
+                """.formatted(tableName, tableName), new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("fp", fingerprint)
+                .addValue("ttlMillis", ttlMillis)
+                .addValue("owner", owner, java.sql.Types.VARCHAR));
+        return rows == 1;
+    }
+
+    @Override
+    public String completeOwnedSql(String tableName) {
+        return """
+                UPDATE %s SET
+                    state = 'COMPLETED', fingerprint = :fp, status = :status,
+                    payload_type = :payloadType, payload = :payload, owner = :owner,
+                    expires_at = clock_timestamp() + (:ttlMillis * INTERVAL '1 millisecond')
+                WHERE id = :id
+                  AND (owner IS NULL OR owner = :owner OR expires_at < clock_timestamp())
+                """.formatted(tableName);
+    }
+
+    @Override
+    public String releaseOwnedSql(String tableName) {
+        return """
+                DELETE FROM %s
+                WHERE id = :id
+                  AND (owner IS NULL OR owner = :owner OR expires_at < clock_timestamp())
+                """.formatted(tableName);
+    }
+
+    @Override
+    public String addOwnerColumnSql(String tableName) {
+        return "ALTER TABLE %s ADD COLUMN IF NOT EXISTS owner VARCHAR(36)".formatted(tableName);
+    }
+
 }

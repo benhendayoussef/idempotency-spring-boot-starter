@@ -18,6 +18,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -54,8 +56,12 @@ class JdbcIdempotencyStoreTest {
         dataSource.setPassword(POSTGRES.getPassword());
 
         jdbcTemplate = new JdbcTemplate(dataSource);
+        // The shipped script rather than a copy of it, so the tests exercise the schema users get.
+        new ResourceDatabasePopulator(new ClassPathResource("db/idempotency/postgres.sql")).execute(dataSource);
+
+        // The shape a 1.1 install has: created before the owner column existed.
         jdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS idempotency_record (
+                CREATE TABLE IF NOT EXISTS legacy_idempotency_record (
                     id            VARCHAR(64)  PRIMARY KEY,
                     state         VARCHAR(16)  NOT NULL,
                     fingerprint   VARCHAR(64)  NOT NULL,
@@ -191,5 +197,118 @@ class JdbcIdempotencyStoreTest {
 
         assertThat(store.find(key)).isEmpty();
         assertThat(store.claim(key, "fp", Duration.ofMinutes(5))).isInstanceOf(ClaimResult.Acquired.class);
+    }
+
+    // --- Claim ownership (issue #19) ---------------------------------------------------------
+
+    private static final Duration LONG = Duration.ofMinutes(5);
+
+    private static IdempotencyRecord completed(String payload) {
+        return new IdempotencyRecord(State.COMPLETED, "fp", 201, "java.lang.String", payload, Instant.now());
+    }
+
+    private static String ownerOf(String key) {
+        return jdbcTemplate.queryForObject("SELECT owner FROM idempotency_record WHERE id = ?", String.class, key);
+    }
+
+    @Test
+    void theShippedScriptAddsTheOwnerColumnToATableThatPredatesIt() {
+        jdbcTemplate.execute("CREATE TABLE script_upgrade_probe (LIKE legacy_idempotency_record INCLUDING ALL)");
+        try {
+            String upgraded = new ClassPathResource("db/idempotency/postgres.sql").getContentAsString(
+                    java.nio.charset.StandardCharsets.UTF_8).replace("idempotency_record", "script_upgrade_probe")
+                    .replace("ix_idempotency_expires", "ix_script_upgrade_probe");
+            new ResourceDatabasePopulator(new org.springframework.core.io.ByteArrayResource(
+                    upgraded.getBytes(java.nio.charset.StandardCharsets.UTF_8))).execute(dataSource);
+            assertThat(jdbcTemplate.queryForObject("""
+                    SELECT count(*) FROM information_schema.columns
+                    WHERE table_name = 'script_upgrade_probe' AND column_name = 'owner'
+                    """, Integer.class)).isEqualTo(1);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        } finally {
+            jdbcTemplate.execute("DROP TABLE script_upgrade_probe");
+        }
+    }
+
+    @Test
+    void theClaimRecordsItsOwnerAndTheOwnerCompletesIt() {
+        JdbcIdempotencyStore store = store();
+        String key = "own-" + System.nanoTime();
+
+        store.claim(key, "fp", LONG, "a");
+        assertThat(ownerOf(key)).isEqualTo("a");
+
+        assertThat(store.complete(key, "a", completed("\"a\""), LONG)).isTrue();
+        assertThat(store.find(key)).get().extracting(IdempotencyRecord::payload).isEqualTo("\"a\"");
+    }
+
+    @Test
+    void anotherOwnersLiveClaimBlocksCompletionAndRelease() throws Exception {
+        JdbcIdempotencyStore store = store();
+        String key = "other-" + System.nanoTime();
+        store.claim(key, "fp", Duration.ofMillis(50), "a");
+        Thread.sleep(150);
+        assertThat(store.claim(key, "fp", LONG, "b")).isInstanceOf(ClaimResult.Acquired.class);
+        assertThat(ownerOf(key)).as("a reclaim must take the owner over").isEqualTo("b");
+
+        assertThat(store.complete(key, "a", completed("\"a\""), LONG)).isFalse();
+        assertThat(store.release(key, "a")).isFalse();
+        assertThat(store.find(key)).get().extracting(IdempotencyRecord::state).isEqualTo(State.IN_PROGRESS);
+
+        assertThat(store.complete(key, "b", completed("\"b\""), LONG)).isTrue();
+        assertThat(store.complete(key, "a", completed("\"a\""), LONG))
+                .as("the winner's stored response must not be overwritten either")
+                .isFalse();
+        assertThat(store.find(key)).get().extracting(IdempotencyRecord::payload).isEqualTo("\"b\"");
+    }
+
+    @Test
+    void theOwnerReleasesItsOwnClaimAndAGoneKeyCountsAsReleased() {
+        JdbcIdempotencyStore store = store();
+        String key = "release-own-" + System.nanoTime();
+        store.claim(key, "fp", LONG, "a");
+
+        assertThat(store.release(key, "a")).isTrue();
+        assertThat(store.find(key)).isEmpty();
+        assertThat(store.release(key, "a")).isTrue();
+    }
+
+    /** What 1.1 did, and must keep doing: a slow run nobody competed with still stores its response. */
+    @Test
+    void anExpiredClaimNobodyReclaimedIsStillCompleted() throws Exception {
+        JdbcIdempotencyStore store = store();
+        String key = "expired-" + System.nanoTime();
+        store.claim(key, "fp", Duration.ofMillis(50), "a");
+        Thread.sleep(150);
+
+        assertThat(store.complete(key, "a", completed("\"a\""), LONG)).isTrue();
+        assertThat(store.find(key)).get().extracting(IdempotencyRecord::payload).isEqualTo("\"a\"");
+    }
+
+    /** A row written by a 1.1 instance during a rolling upgrade has no owner and is anyone's to settle. */
+    @Test
+    void anUnownedRowCanBeSettledByAnyOwner() {
+        JdbcIdempotencyStore store = store();
+        String key = "unowned-" + System.nanoTime();
+        store.claim(key, "fp", LONG);
+        assertThat(ownerOf(key)).isNull();
+
+        assertThat(store.complete(key, "a", completed("\"a\""), LONG)).isTrue();
+    }
+
+    @Test
+    void withoutTheOwnerColumnTheStoreBehavesAsIn11() {
+        var store = new JdbcIdempotencyStore(new NamedParameterJdbcTemplate(dataSource),
+                "legacy_idempotency_record", new PostgresDialect());
+        String key = "legacy-" + System.nanoTime();
+
+        assertThat(store.claim(key, "fp", LONG, "a")).isInstanceOf(ClaimResult.Acquired.class);
+        assertThat(store.complete(key, "b", completed("\"b\""), LONG))
+                .as("no column to check against, so completion is unconditional, as before")
+                .isTrue();
+        assertThat(store.find(key)).get().extracting(IdempotencyRecord::payload).isEqualTo("\"b\"");
+        assertThat(store.release(key, "c")).isTrue();
+        assertThat(store.find(key)).isEmpty();
     }
 }

@@ -53,4 +53,28 @@ public interface IdempotencySqlDialect {
 
     /** Parameters: {@code :id}. Must not return rows that have already expired. */
     String findSql(String tableName);
+
+    // --- Claim ownership (issue #19). Everything below needs the owner column added in 1.2; the
+    // methods above never touch it, so they keep working on a table that predates it. ------------
+
+    /**
+     * {@link #tryAcquire}, additionally recording {@code owner} on the row - on a reclaim too, so a
+     * row never carries the owner of a claim that has already expired. {@code owner} may be
+     * {@code null}, which leaves the row unowned.
+     */
+    boolean tryAcquireOwned(NamedParameterJdbcTemplate jdbc, String tableName, String id, String fingerprint,
+            long ttlMillis, String owner);
+
+    /**
+     * As {@link #completeSql}, plus {@code :owner}. Must update the row only if no other owner holds
+     * it: the row is unowned, owned by {@code :owner}, or already past its expiry. Must also set the
+     * row's owner to {@code :owner}.
+     */
+    String completeOwnedSql(String tableName);
+
+    /** Parameters: {@code :id}, {@code :owner}. Deletes the row under the same condition as {@link #completeOwnedSql}. */
+    String releaseOwnedSql(String tableName);
+
+    /** The statement that adds the owner column to a table created before 1.2. Used in the error message when it is missing. */
+    String addOwnerColumnSql(String tableName);
 }

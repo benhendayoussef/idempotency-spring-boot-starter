@@ -69,4 +69,25 @@ public final class LazySqlDialect implements IdempotencySqlDialect {
     public String findSql(String tableName) {
         return delegate().findSql(tableName);
     }
+
+    @Override
+    public boolean tryAcquireOwned(NamedParameterJdbcTemplate jdbc, String tableName, String id,
+            String fingerprint, long ttlMillis, String owner) {
+        return delegate().tryAcquireOwned(jdbc, tableName, id, fingerprint, ttlMillis, owner);
+    }
+
+    @Override
+    public String completeOwnedSql(String tableName) {
+        return delegate().completeOwnedSql(tableName);
+    }
+
+    @Override
+    public String releaseOwnedSql(String tableName) {
+        return delegate().releaseOwnedSql(tableName);
+    }
+
+    @Override
+    public String addOwnerColumnSql(String tableName) {
+        return delegate().addOwnerColumnSql(tableName);
+    }
 }

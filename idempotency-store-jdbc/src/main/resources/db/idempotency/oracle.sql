@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS idempotency_record (
     payload_type  VARCHAR2(512),
     payload       CLOB,
     created_at    TIMESTAMP WITH LOCAL TIME ZONE NOT NULL,
-    expires_at    TIMESTAMP WITH LOCAL TIME ZONE NOT NULL
+    expires_at    TIMESTAMP WITH LOCAL TIME ZONE NOT NULL,
+    -- Added in 1.2. A table created by an earlier version needs it added by hand:
+    --   ALTER TABLE idempotency_record ADD (owner VARCHAR2(36))
+    owner         VARCHAR2(36)
 );
 CREATE INDEX IF NOT EXISTS ix_idempotency_expires ON idempotency_record (expires_at);
