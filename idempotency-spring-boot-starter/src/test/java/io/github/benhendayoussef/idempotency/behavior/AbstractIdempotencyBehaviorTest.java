@@ -600,6 +600,134 @@ abstract class AbstractIdempotencyBehaviorTest {
     }
 
     // ==========================================================================================
+    // Lost claim (issue #19). A run whose claim expired mid-handler must not write to a key that
+    // has since been reclaimed by another run.
+    // ==========================================================================================
+
+    /** Short enough to expire while the first run is parked, long enough to outlive a fast run. */
+    private static final Duration SHORT_CLAIM = Duration.ofMillis(300);
+
+    /**
+     * Sequence A: run A's claim expires mid-handler, run B reclaims, executes and completes. When A
+     * finishes, its {@code complete()} must not overwrite B's stored response - otherwise client B
+     * saw one answer and every later replay of the same key returns another.
+     */
+    @Test
+    void lostClaim_sequenceA_lateCompletionDoesNotOverwriteWinnersResponse() throws Exception {
+        String key = newKey();
+        var a = new LeaseStep(false);
+        controller.armLease(a, new LeaseStep(false).unblocked());
+
+        Duration originalClaimTtl = props.getClaimTtl();
+        props.setClaimTtl(SHORT_CLAIM);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<org.springframework.test.web.servlet.MvcResult> runA = pool.submit(() ->
+                    mockMvc.perform(post("/m/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}")).andReturn());
+            assertThat(a.started.await(10, TimeUnit.SECONDS)).as("run A must have claimed the key").isTrue();
+
+            Thread.sleep(SHORT_CLAIM.toMillis() * 3); // A's claim is now expired, A still running
+
+            String bodyB = mockMvc.perform(post("/m/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}"))
+                    .andExpect(status().isCreated())
+                    .andExpect(header().doesNotExist("Idempotent-Replay"))
+                    .andReturn().getResponse().getContentAsString();
+            assertThat(bodyB).contains("\"run\":2");
+
+            a.release.countDown();
+            assertThat(runA.get(10, TimeUnit.SECONDS).getResponse().getStatus())
+                    .isEqualTo(HttpStatus.CREATED.value());
+
+            String replay = mockMvc.perform(post("/m/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}"))
+                    .andExpect(status().isCreated())
+                    .andExpect(header().string("Idempotent-Replay", "true"))
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(replay)
+                    .as("a replay must return what client B was told, not what the run that lost "
+                            + "its claim produced afterwards")
+                    .isEqualTo(bodyB);
+            assertThat(controller.leaseCount()).isEqualTo(2);
+        } finally {
+            a.release.countDown();
+            pool.shutdownNow();
+            props.setClaimTtl(originalClaimTtl);
+        }
+    }
+
+    /**
+     * Sequence B: run A's claim expires mid-handler, run B reclaims and is still running. A then
+     * fails with a 5xx; its {@code release()} must not delete B's claim - otherwise run C claims the
+     * key and executes while B is still in flight, a third execution of one idempotent request.
+     */
+    @Test
+    void lostClaim_sequenceB_lateReleaseDoesNotDeleteWinnersClaim() throws Exception {
+        String key = newKey();
+        var a = new LeaseStep(true);
+        var b = new LeaseStep(false);
+        controller.armLease(a, b, new LeaseStep(false).unblocked());
+
+        Duration originalClaimTtl = props.getClaimTtl();
+        props.setClaimTtl(SHORT_CLAIM);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<org.springframework.test.web.servlet.MvcResult> runA = pool.submit(() ->
+                    mockMvc.perform(post("/m/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}")).andReturn());
+            assertThat(a.started.await(10, TimeUnit.SECONDS)).as("run A must have claimed the key").isTrue();
+
+            Thread.sleep(SHORT_CLAIM.toMillis() * 3); // A's claim is now expired, A still running
+
+            // B reclaims with a long lease so that its own claim cannot be what expires here.
+            props.setClaimTtl(Duration.ofMinutes(5));
+            Future<org.springframework.test.web.servlet.MvcResult> runB = pool.submit(() ->
+                    mockMvc.perform(post("/m/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}")).andReturn());
+            assertThat(b.started.await(10, TimeUnit.SECONDS)).as("run B must have reclaimed the key").isTrue();
+
+            a.release.countDown(); // A now fails with a 5xx, which releases the key
+            assertThat(runA.get(10, TimeUnit.SECONDS).getResponse().getStatus())
+                    .isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR.value());
+
+            mockMvc.perform(post("/m/lease").header("Idempotency-Key", key)
+                            .contentType("application/json").content("{}"))
+                    .andExpect(status().isConflict());
+
+            assertThat(controller.leaseCount())
+                    .as("B still holds the key, so C must be told it is in flight - not run a third time")
+                    .isEqualTo(2);
+
+            b.release.countDown();
+            assertThat(runB.get(10, TimeUnit.SECONDS).getResponse().getStatus())
+                    .isEqualTo(HttpStatus.CREATED.value());
+        } finally {
+            a.release.countDown();
+            b.release.countDown();
+            pool.shutdownNow();
+            props.setClaimTtl(originalClaimTtl);
+        }
+    }
+
+    /** One scripted invocation of {@code /m/lease}: signals when it starts, waits to be released. */
+    static final class LeaseStep {
+        final CountDownLatch started = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final boolean fail5xx;
+
+        LeaseStep(boolean fail5xx) {
+            this.fail5xx = fail5xx;
+        }
+
+        LeaseStep unblocked() {
+            release.countDown();
+            return this;
+        }
+    }
+
+    // ==========================================================================================
     // Concurrency soak. This is the check that decides whether the library is correct.
     // ==========================================================================================
 
@@ -778,6 +906,8 @@ abstract class AbstractIdempotencyBehaviorTest {
         final AtomicInteger userScopeCount = new AtomicInteger();
         final AtomicInteger voidCount = new AtomicInteger();
         final AtomicInteger listCount = new AtomicInteger();
+        final AtomicInteger leaseCount = new AtomicInteger();
+        private volatile List<LeaseStep> leaseSteps = List.of();
         final java.util.concurrent.atomic.AtomicBoolean failNextInfra = new java.util.concurrent.atomic.AtomicBoolean();
 
         private volatile CountDownLatch waitStarted;
@@ -806,7 +936,17 @@ abstract class AbstractIdempotencyBehaviorTest {
             userScopeCount.set(0);
             voidCount.set(0);
             listCount.set(0);
+            leaseCount.set(0);
+            leaseSteps = List.of();
             failNextInfra.set(false);
+        }
+
+        void armLease(LeaseStep... steps) {
+            this.leaseSteps = List.of(steps);
+        }
+
+        int leaseCount() {
+            return leaseCount.get();
         }
 
         // Reads must go through these methods, not direct field access on the @Autowired
@@ -921,6 +1061,27 @@ abstract class AbstractIdempotencyBehaviorTest {
 
         @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
         static class InfrastructureException extends RuntimeException {
+        }
+
+        /**
+         * Scripted by {@link #armLease}: invocation n follows step n. The body names the run, so a
+         * replay shows which run's response was stored. FAIL_FAST so a run that finds the key held
+         * answers 409 at once rather than waiting on it.
+         */
+        @Idempotent(onConflict = ConflictPolicy.FAIL_FAST)
+        @PostMapping("/m/lease")
+        ResponseEntity<Map<String, Object>> lease(@RequestBody Map<String, Object> body) throws InterruptedException {
+            int run = leaseCount.incrementAndGet();
+            List<LeaseStep> steps = leaseSteps;
+            if (run <= steps.size()) {
+                LeaseStep step = steps.get(run - 1);
+                step.started.countDown();
+                step.release.await(30, TimeUnit.SECONDS);
+                if (step.fail5xx) {
+                    throw new InfrastructureException();
+                }
+            }
+            return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("run", run));
         }
 
         @Idempotent
