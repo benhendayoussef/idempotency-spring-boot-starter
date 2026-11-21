@@ -36,6 +36,7 @@ final class MicrometerIdempotencyMetrics implements IdempotencyMetrics {
     private final Counter missingKey;
     private final Counter storeFailure;
     private final Counter principalMissing;
+    private final Counter lostClaim;
 
     MicrometerIdempotencyMetrics(MeterRegistry registry) {
         this.executed = counter(registry, "executed");
@@ -48,6 +49,7 @@ final class MicrometerIdempotencyMetrics implements IdempotencyMetrics {
         this.missingKey = counter(registry, "missing_key");
         this.storeFailure = counter(registry, "store_failure");
         this.principalMissing = counter(registry, "principal_missing");
+        this.lostClaim = counter(registry, "lost_claim");
     }
 
     private static Counter counter(MeterRegistry registry, String outcome) {
@@ -105,5 +107,10 @@ final class MicrometerIdempotencyMetrics implements IdempotencyMetrics {
     @Override
     public void principalMissing() {
         principalMissing.increment();
+    }
+
+    @Override
+    public void lostClaim() {
+        lostClaim.increment();
     }
 }

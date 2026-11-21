@@ -36,4 +36,12 @@ public interface IdempotencyMetrics {
 
     default void principalMissing() {
     }
+
+    /**
+     * The handler finished, but its claim had expired and the key was no longer its own, so its
+     * completion or release was skipped. Counted once per run, alongside that run's other outcome.
+     * Any non-zero rate means {@code idempotency.claim-ttl} is shorter than the slowest handler.
+     */
+    default void lostClaim() {
+    }
 }

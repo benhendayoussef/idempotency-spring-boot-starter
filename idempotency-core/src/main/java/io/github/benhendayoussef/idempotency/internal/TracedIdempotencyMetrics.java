@@ -93,4 +93,10 @@ public final class TracedIdempotencyMetrics implements IdempotencyMetrics {
         delegate.principalMissing();
         tracer.outcome("principal_missing");
     }
+
+    @Override
+    public void lostClaim() {
+        delegate.lostClaim();
+        tracer.outcome("lost_claim");
+    }
 }
