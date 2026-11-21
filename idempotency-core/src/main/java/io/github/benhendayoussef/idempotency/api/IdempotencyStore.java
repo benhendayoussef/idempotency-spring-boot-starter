@@ -50,16 +50,18 @@ public interface IdempotencyStore {
     }
 
     /**
-     * {@link #complete(String, IdempotencyRecord, Duration)}, applied only if {@code owner} still
-     * holds the key.
+     * {@link #complete(String, IdempotencyRecord, Duration)}, skipped if the key is now held by a
+     * <em>different</em> owner.
      *
-     * <p>A record with no owner recorded - one written by a version of this library that did not
-     * track owners - counts as held by any caller, so it is completed exactly as before.
+     * <p>Only another owner's live claim or record blocks the write. A claim that expired without
+     * being reclaimed is still this caller's to complete, exactly as before owners existed - a
+     * handler slightly slower than {@code claim-ttl} with no competing request must not lose its
+     * response. A record with no owner recorded (written by a version of this library that did not
+     * track owners) counts as held by any caller.
      *
      * <p>The default ignores {@code owner}, completes unconditionally and returns {@code true}.
      *
-     * @return {@code false} if the key is held by someone else or no longer present, in which case
-     *         nothing was written
+     * @return {@code false} if nothing was written, normally because another owner holds the key
      */
     default boolean complete(String key, String owner, IdempotencyRecord record, Duration ttl) {
         complete(key, record, ttl);
@@ -67,14 +69,13 @@ public interface IdempotencyStore {
     }
 
     /**
-     * {@link #release(String)}, applied only if {@code owner} still holds the key. A record with no
-     * owner recorded counts as held by any caller, as for
-     * {@link #complete(String, String, IdempotencyRecord, Duration)}.
+     * {@link #release(String)}, skipped if the key is now held by a <em>different</em> owner. The
+     * same rules as {@link #complete(String, String, IdempotencyRecord, Duration)} decide who holds
+     * it; a key that is already gone counts as released.
      *
      * <p>The default ignores {@code owner}, releases unconditionally and returns {@code true}.
      *
-     * @return {@code false} if the key is held by someone else or no longer present, in which case
-     *         nothing was deleted
+     * @return {@code false} if another owner holds the key, in which case nothing was deleted
      */
     default boolean release(String key, String owner) {
         release(key);

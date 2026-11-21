@@ -7,6 +7,7 @@ import io.github.benhendayoussef.idempotency.api.IdempotencyRecord;
 import io.github.benhendayoussef.idempotency.api.IdempotencyStore;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -32,8 +33,15 @@ public class CaffeineIdempotencyStore implements IdempotencyStore {
      * The expiry deadline is carried on the entry rather than being a fixed cache-wide duration,
      * because TTL is per-record here: {@code @Idempotent(ttl = ...)} lets it vary per endpoint, and
      * {@code complete()} re-stamps it.
+     *
+     * <p>{@code owner} is {@code null} for a claim made without one, which any caller may then
+     * settle.
      */
-    private record Entry(IdempotencyRecord record, Instant expiresAt) {
+    private record Entry(IdempotencyRecord record, Instant expiresAt, String owner) {
+
+        boolean ownedBy(String caller) {
+            return owner == null || owner.equals(caller);
+        }
     }
 
     private final Cache<String, Entry> cache;
@@ -76,6 +84,11 @@ public class CaffeineIdempotencyStore implements IdempotencyStore {
         return Math.max(nanos, 0L);
     }
 
+    @Override
+    public ClaimResult claim(String key, String fingerprint, Duration ttl) {
+        return claim(key, fingerprint, ttl, null);
+    }
+
     /**
      * {@inheritDoc}
      *
@@ -88,13 +101,13 @@ public class CaffeineIdempotencyStore implements IdempotencyStore {
      * as live would mean a caller conflicts with a record that should already be gone.
      */
     @Override
-    public ClaimResult claim(String key, String fingerprint, Duration ttl) {
+    public ClaimResult claim(String key, String fingerprint, Duration ttl, String owner) {
         Instant now = Instant.now();
-        var candidate = new Entry(IdempotencyRecord.inProgress(fingerprint, now), now.plus(ttl));
+        var candidate = new Entry(IdempotencyRecord.inProgress(fingerprint, now), now.plus(ttl), owner);
 
         Entry[] winner = new Entry[1];
         cache.asMap().compute(key, (k, existing) -> {
-            if (existing == null || existing.expiresAt().isBefore(now)) {
+            if (!live(existing, now)) {
                 winner[0] = candidate;
                 return candidate;
             }
@@ -110,7 +123,29 @@ public class CaffeineIdempotencyStore implements IdempotencyStore {
 
     @Override
     public void complete(String key, IdempotencyRecord record, Duration ttl) {
-        cache.put(key, new Entry(record, Instant.now().plus(ttl)));
+        cache.put(key, new Entry(record, Instant.now().plus(ttl), null));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The owner check and the write happen under the entry's lock in {@code asMap().compute()},
+     * the same guarantee {@link #claim} relies on. An entry past its TTL counts as absent: nobody
+     * holds that key, so the response is still this run's to store.
+     */
+    @Override
+    public boolean complete(String key, String owner, IdempotencyRecord record, Duration ttl) {
+        Objects.requireNonNull(owner, "owner");
+        Instant now = Instant.now();
+        boolean[] applied = new boolean[1];
+        cache.asMap().compute(key, (k, existing) -> {
+            if (live(existing, now) && !existing.ownedBy(owner)) {
+                return existing;
+            }
+            applied[0] = true;
+            return new Entry(record, now.plus(ttl), owner);
+        });
+        return applied[0];
     }
 
     @Override
@@ -119,12 +154,28 @@ public class CaffeineIdempotencyStore implements IdempotencyStore {
     }
 
     @Override
+    public boolean release(String key, String owner) {
+        Objects.requireNonNull(owner, "owner");
+        Instant now = Instant.now();
+        boolean[] applied = new boolean[1];
+        cache.asMap().compute(key, (k, existing) -> {
+            if (live(existing, now) && !existing.ownedBy(owner)) {
+                return existing;
+            }
+            applied[0] = true;
+            return null;
+        });
+        return applied[0];
+    }
+
+    @Override
     public Optional<IdempotencyRecord> find(String key) {
         Entry entry = cache.getIfPresent(key);
-        if (entry == null || entry.expiresAt().isBefore(Instant.now())) {
-            return Optional.empty();
-        }
-        return Optional.of(entry.record());
+        return live(entry, Instant.now()) ? Optional.of(entry.record()) : Optional.empty();
+    }
+
+    private static boolean live(Entry entry, Instant now) {
+        return entry != null && !entry.expiresAt().isBefore(now);
     }
 
     /** Entries currently held, after any pending eviction work. Exposed for tests and diagnostics. */
