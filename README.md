@@ -83,6 +83,19 @@ on first use, so `idempotency.jdbc.dialect` only needs setting to skip detection
 Similarly for **Oracle**, the schema is (`classpath:db/idempotency/oracle.sql`).
 > Minimum Oracle version required is 19c with minimum patch version 19.28.0.0: in case of previous version please override the schema to avoid the `IF NOT EXISTS` syntax or avoid the initialization  
 
+> **Upgrading a table created before 1.2.** 1.2 adds a nullable `owner` column, which
+> `CREATE TABLE IF NOT EXISTS` does not add to an existing table. Run the statement for your
+> database once:
+>
+> | Database | Statement |
+> |---|---|
+> | PostgreSQL | `ALTER TABLE idempotency_record ADD COLUMN IF NOT EXISTS owner VARCHAR(36);` (re-running `postgres.sql` also does it) |
+> | MySQL / MariaDB | `ALTER TABLE idempotency_record ADD COLUMN owner VARCHAR(36) NULL;` |
+> | Oracle | `ALTER TABLE idempotency_record ADD (owner VARCHAR2(36));` |
+>
+> Until you do, the store logs one `ERROR` naming the statement and keeps the 1.1 behaviour, so
+> nothing breaks - but the [lost-claim protection](#the-two-ttls) is off for that table.
+
 The same `@Idempotent` annotation and `curl` round trip from the Redis quickstart apply unchanged.
 
 ## Quickstart (Caffeine — single instance)
@@ -185,6 +198,18 @@ deletes rows that are already past expiry.
 > still running, a concurrent duplicate reclaims the key and both execute - the exact failure this
 > library exists to prevent. The 5-minute default is deliberately generous against typical proxy and
 > load-balancer timeouts; raise it if you have handlers that legitimately run longer.
+
+Since 1.2 the damage is contained to that double execution. Every claim carries an owner token, and
+a request may store its response or release the key only while no *other* request holds it. So the
+request whose claim expired cannot overwrite the response the second request already gave its
+client, nor delete the second request's claim and let a third one run. It still answers its own
+client - its handler ran - and the event is logged as a `WARN` and counted as `lost_claim`. A claim
+that expired with nobody else taking the key is still completed normally, as before.
+
+Two edges remain. When a claim could not be made at all and the request ran unprotected (the store
+fails open under sustained churn), it has no claim to lose, so its response is cached only if the
+key is still free when it finishes. And during a rolling upgrade from 1.1, an old instance neither
+records nor checks owners, so requests it handles are unprotected until it is replaced.
 
 The lease is capped at the retention TTL in effect, so asking for a 30-second idempotency window
 never leaves a dead claim sitting for five minutes - and it can never hold a claim *longer* than
@@ -389,6 +414,7 @@ Everything lands on **one** counter, `idempotency.requests`, separated by an `ou
 | `released` | The key was released so a retry can re-execute (5xx, or a timeout) |
 | `conflict` | A duplicate arrived while the first was in flight and got a 409 |
 | `wait_timeout` | A `WAIT`-policy duplicate gave up waiting |
+| `lost_claim` | The handler outlived `claim-ttl` and another request claimed the key meanwhile; this request's response was not stored, or its release skipped. Raise `claim-ttl` if this is ever non-zero |
 | `fingerprint_mismatch` | Same key, different request body - the 422 case |
 | `missing_key` | No idempotency key on the request |
 | `store_failure` | The store was unreachable |
@@ -561,6 +587,10 @@ IdempotencyStore idempotencyStore(/* ... */) {
     return new DynamoDbIdempotencyStore(/* ... */);
 }
 ```
+
+To protect against lost claims as the built-in stores do, also override the owner-aware overloads
+of `claim`, `complete` and `release` (see "Claim ownership" in the `IdempotencyStore` javadoc).
+Their defaults ignore the owner, so a store written for 1.1 keeps working exactly as it did.
 
 `ScopeResolver` decides the namespace that keeps one caller's key from colliding with another's.
 Everything it needs arrives in the `IdempotencyContext` — it never reads ambient state, which is

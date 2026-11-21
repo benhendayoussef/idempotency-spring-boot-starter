@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **A request whose claim expired mid-handler no longer writes to a key another request has claimed
+  since** ([#19](https://github.com/benhendayoussef/idempotency-spring-boot-starter/issues/19)).
+  When a handler outlived `idempotency.claim-ttl` and a retry reclaimed the key, the first request's
+  late `complete()` overwrote the response the retry had already returned, and its late `release()`
+  deleted the retry's live claim so a third request could run. Every claim now carries an owner
+  token, and a request settles the key only while no other request holds it. It still answers its
+  own client. A claim that expired with nobody else taking the key is completed as before. This
+  applies to aspect mode, filter mode and WebFlux, and to every built-in store.
+
+### Added
+
+- `lost_claim` outcome on `idempotency.requests` and the `idempotency.outcome` span tag, plus a
+  `WARN` log, when a request finds its claim taken. Non-zero means `claim-ttl` is shorter than a
+  handler.
+- Owner-aware `default` overloads on `IdempotencyStore`: `claim(key, fingerprint, ttl, owner)`,
+  `complete(key, owner, record, ttl)` and `release(key, owner)`. The defaults delegate to the 1.1
+  methods, so existing custom stores compile and behave as before. `IdempotencyMetrics.lostClaim()`
+  is a `default` no-op.
+
+### Upgrade notes
+
+- **JDBC:** the schema gains a nullable `owner` column. Existing tables need one `ALTER TABLE`
+  (statements for each database are in the README's JDBC quickstart; re-running `postgres.sql`
+  applies it on PostgreSQL). Without it the store logs an `ERROR` once and keeps the 1.1 behaviour
+  rather than failing.
+- **Redis:** the owner is stored in a second key, `{<key>}:owner`, whose hash tag places it in the
+  record's cluster slot, and has the record's TTL. The record format is unchanged.
+- **Rolling upgrade:** 1.1 instances neither record nor check owners, so the protection applies
+  once every instance runs 1.2.
+
 ## [1.1.0] - 2026-11-03
 
 ### Added
